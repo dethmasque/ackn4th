@@ -44,6 +44,14 @@ type Options struct {
 	Login func(providers []string) *exec.Cmd
 	// Trusted reports whether agents may work in a directory.
 	Trusted func(dir string) bool
+	// RepoDir is where a task for a GitHub repo works: the clone it makes,
+	// or reuses (exists), in the default workspace root. It changes
+	// nothing. nil hides it.
+	RepoDir func(repo string) (dir string, exists bool, err error)
+	// Uncommitted counts the files in a workspace with changes git hasn't
+	// committed; an error means it can't tell (not a repository). nil
+	// hides it.
+	Uncommitted func(dir string) (int, error)
 	// Roles and Providers are what the form offers; Defaults seed it.
 	Roles     []Choice
 	Providers []ProviderChoice
@@ -139,12 +147,13 @@ type model struct {
 	failed   string // the last action's error; shown until the next key
 	err      error
 
-	speaker   Speaker      // the voice, while on
-	entered   bool         // while speaking: a task or tab was just reached
-	more      *followUpBox // the follow-up dialog, while open
-	voiceBusy bool         // the voice is starting
-	closed    bool         // the dashboard has quit
-	news      []string     // changes to say at the next tick
+	speaker   Speaker                 // the voice, while on
+	entered   bool                    // while speaking: a task or tab was just reached
+	more      *followUpBox            // the follow-up dialog, while open
+	changes   map[string]*changeState // what git says of stopped tasks' workspaces
+	voiceBusy bool                    // the voice is starting
+	closed    bool                    // the dashboard has quit
+	news      []string                // changes to say at the next tick
 }
 
 func newModel(opt Options) *model {
@@ -259,7 +268,9 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.frame%pollTicks == 0 {
 			m.poll()
 		}
-		return m, tea.Batch(tick(), m.maybeOfferSetup())
+		return m, tea.Batch(tick(), m.maybeOfferSetup(), m.checkChanges())
+	case changesMsg:
+		m.changesChecked(msg)
 	case setupStatusMsg:
 		if m.setup != nil {
 			m.setup.states, m.setup.loading = msg, false

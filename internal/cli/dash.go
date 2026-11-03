@@ -155,6 +155,12 @@ func (a *app) dashOptions(ctx context.Context, focus string, speak *bool) (dash.
 			_, err := config.SetKey("tips", false)
 			return err
 		},
+		RepoDir: a.repoDir,
+		Uncommitted: func(dir string) (int, error) {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			return github.Uncommitted(ctx, dir)
+		},
 		Trusted: func(dir string) bool {
 			allowed, err := a.cfg.AllowedRoots()
 			if err != nil {

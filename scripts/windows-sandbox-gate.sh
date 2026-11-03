@@ -8,7 +8,7 @@ pattern='TestProtectedDirs|TestCannotChange|TestLauncher|TestUserFiles|TestReadO
 out=$(mktemp)
 trap 'rm -f "$out"' EXIT
 
-go test -count=1 -v -run "$pattern" ./internal/sandbox/ 2>&1 | tee "$out"
+go test -tags winsandbox -count=1 -v -run "$pattern" ./internal/sandbox/ 2>&1 | tee "$out"
 
 if grep -E -- '--- SKIP' "$out"; then
   echo "gate failed: sandbox security tests were skipped" >&2

@@ -455,6 +455,7 @@ func (m *model) overview(l *Live, w, h int) []string {
 		}
 		out = append(out, mark(reason)...)
 	}
+	out = append(out, m.changesNote(l, w-1)...)
 	if (t.Status == task.Failed || t.Status == task.Stopped) && m.opt.Resume != nil {
 		out = append(out, pDim("  press ")+pill("r", bg3, lime)+pDim(" to resume where it left off"))
 	}

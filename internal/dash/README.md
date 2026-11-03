@@ -83,6 +83,11 @@ address after them), in handoffs, details and the activity log.
 - **FOR YOU** lists the action items agents left for you as they worked:
   decisions only you can make, credentials, manual steps, things they
   couldn't verify.
+- When a task isn't running and its workspace has uncommitted changes, the
+  overview says how many files and where (pointing out a clone, or a
+  directory other than the current one), and how to get them out: commit
+  there, or `ackn4th open-pr <task>`. ackn4th asks git, with the
+  workspace's hooks and fsmonitor off so nothing in it runs.
 
 ## Keys
 
@@ -128,8 +133,10 @@ opens the new-task form, no flags needed:
 - **GitHub** repository and branch, both optional. A repository is
   `owner/name`, `https://github.com/owner/name` or
   `git@github.com:owner/name.git`; it is cloned with `gh` into
-  `default_workspace_root` (or reused) and takes the workspace's place. A
-  branch is checked out, fetched, or created. See
+  `default_workspace_root` (or reused) and takes the workspace's place:
+  the form shows the path it will clone to, or the clone it will reuse, as
+  you type. The agents' changes are made there, not in the directory
+  ackn4th was started in. A branch is checked out, fetched, or created. See
   [GitHub](../github/README.md).
 - **Mode** (turns or parallel), **rounds**, and **draft PR**: open a draft
   pull request when the task completes.

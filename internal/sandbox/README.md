@@ -143,8 +143,13 @@ services on the machine's localhost, because Windows exempts the whole
 AppContainer profile, not one process; and credential files created after a
 command starts are not protected by name. Without a working sandbox
 `run_command` and the Codex, Cursor and Copilot providers refuse to run.
+The AppContainer code is compiled only with `-tags winsandbox`, so no
+Windows build of ackn4th can run it by accident; the `windows-sandbox` job
+builds with that tag, and while it's expected to fail it doesn't fail the
+workflow.
 
-**On Windows**, commands run with `cmd.exe`. An AppContainer can read the
+**The Windows design**, for when it passes: commands run with `cmd.exe`.
+An AppContainer can read the
 system (Windows, Program Files) and none of your files unless their access
 list allows it. So the first time a workspace, scratch directory or tool
 folder on your `PATH` is used, ackn4th adds an entry to its access list

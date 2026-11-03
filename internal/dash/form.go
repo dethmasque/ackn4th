@@ -236,6 +236,29 @@ func (f *form) newAgent(role, provider string) agentRow {
 	return a
 }
 
+// repoWhere says where a task for repo will work, in w cells.
+func (f *form) repoWhere(repo string, w int) string {
+	if f.opt.RepoDir == nil {
+		return pDim(fit("unused: the repo is cloned", w))
+	}
+	dir, exists, err := f.opt.RepoDir(repo)
+	switch {
+	case err != nil:
+		return pAmber(ansi.Truncate("✗ "+repoHint(err), w, "…"))
+	case exists:
+		return pDim("unused · reuses ") + pLime(ansi.TruncateLeft(tildePath(dir), max(0, width(tildePath(dir))-(w-16)), "…"))
+	}
+	return pDim("unused · clones to ") + pLime(ansi.TruncateLeft(tildePath(dir), max(0, width(tildePath(dir))-(w-19)), "…"))
+}
+
+// repoHint is a repo error, short: the form shows it beside the field.
+func repoHint(err error) string {
+	if strings.Contains(err.Error(), "isn't a repository") {
+		return "use owner/name or a github.com URL"
+	}
+	return err.Error()
+}
+
 // untrusted reports whether the workspace needs trusting first; a GitHub
 // repo is cloned into the (trusted) default workspace root instead.
 func (f *form) untrusted() bool {
@@ -806,10 +829,14 @@ func (f *form) render(m *model, w, maxH int) string {
 	if f.untrusted() {
 		trust = "  " + checkbox("trust it", f.trust, focused("trust", 0))
 	}
-	if strings.TrimSpace(f.repo.String()) != "" {
-		trust = "  " + pDim("unused: the repo is cloned")
+	fieldW := inner - 11 - width(trust)
+	if repo := strings.TrimSpace(f.repo.String()); repo != "" {
+		// The workspace isn't used: say where the work will be instead,
+		// since it isn't the directory ackn4th was started in.
+		fieldW = min(fieldW, 14)
+		trust = "  " + f.repoWhere(repo, inner-11-fieldW-2)
 	}
-	add(pDim("WORKSPACE  ") + textField(f.workspace, inner-11-width(trust), focused("workspace", 0)) + trust)
+	add(pDim("WORKSPACE  ") + textField(f.workspace, fieldW, focused("workspace", 0)) + trust)
 	bw := min(28, max(12, (inner-11-9-9)/3))
 	add(pDim("GITHUB     ") + pDim("repo ") + textField(f.repo, inner-11-5-9-bw-2, focused("repo", 0)) +
 		pDim("  branch ") + textField(f.branch, bw, focused("branch", 0)))

@@ -270,7 +270,7 @@ func (m *model) whereMain() string {
 	t := l.Task
 	what := fmt.Sprintf("task %s, %s", t.Title(), t.Status)
 	if !m.focusMain {
-		return fmt.Sprintf("Task list, %d of %d: %s. %s Tab opens it.", m.sel+1, len(m.tasks), what, summary(l, true))
+		return fmt.Sprintf("Task list, %d of %d: %s. %s%s Tab opens it.", m.sel+1, len(m.tasks), what, summary(l, true), m.changesSpoken(l))
 	}
 	if m.view == vAgent && m.agent >= 0 && m.agent < len(l.Agents) && m.agent < len(t.Agents) {
 		return m.whereAgent(l, m.agent, true) + " Escape goes back."
@@ -278,7 +278,7 @@ func (m *model) whereMain() string {
 	s := fmt.Sprintf("%s tab of %s.", strings.ToLower(tabNames[m.view]), what)
 	if m.entered {
 		// Just arrived: say what the task is before what is selected.
-		s += " " + summary(l, false)
+		s += " " + summary(l, false) + m.changesSpoken(l)
 	}
 	switch m.view {
 	case vOverview:

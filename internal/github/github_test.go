@@ -179,3 +179,36 @@ func TestDraftPRExistingBranch(t *testing.T) {
 		t.Error("a pull request from the default branch into itself should be refused")
 	}
 }
+
+func TestUncommitted(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	ws := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"}, args...)...)
+		cmd.Dir = ws
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	os.WriteFile(filepath.Join(ws, "a.txt"), []byte("a"), 0o644)
+	os.WriteFile(filepath.Join(ws, "b.txt"), []byte("b"), 0o644)
+	run("add", ".")
+	run("commit", "-q", "-m", "init")
+	if n, err := Uncommitted(context.Background(), ws); err != nil || n != 0 {
+		t.Fatalf("clean: %d %v", n, err)
+	}
+	os.WriteFile(filepath.Join(ws, "a.txt"), []byte("changed"), 0o644)
+	os.MkdirAll(filepath.Join(ws, "new"), 0o755)
+	os.WriteFile(filepath.Join(ws, "new", "c.txt"), []byte("c"), 0o644)
+	run("mv", "b.txt", "renamed.txt")
+	if n, err := Uncommitted(context.Background(), ws); err != nil || n != 3 {
+		t.Fatalf("changed: %d %v, want 3 (a modified, b renamed, new/c.txt)", n, err)
+	}
+	if _, err := Uncommitted(context.Background(), t.TempDir()); err == nil {
+		t.Error("not a repository should be an error")
+	}
+}

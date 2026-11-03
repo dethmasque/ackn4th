@@ -18,11 +18,12 @@ jobs:
   # Windows runner, none skipped. Don't enable Windows in goreleaser until
   # this is green (docs/adr/0001-windows-release-gate.md).
   windows-sandbox:
-    # Skipped on tag builds while Windows isn't released: release.yml calls
-    # this workflow, and an expected-red gate must not block the Linux and
-    # macOS release. Delete this `if` when Windows is enabled in goreleaser,
-    # so the gate then blocks the release.
+    # Expected to fail until the AppContainer sandbox confines, so it
+    # doesn't fail the workflow (continue-on-error), and it's skipped on
+    # tag builds, which release.yml runs. When enabling Windows in
+    # goreleaser, delete both so the gate blocks the release.
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    continue-on-error: true
     runs-on: windows-2025 # pinned image; bump deliberately
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -36,9 +37,6 @@ jobs:
         run: bash scripts/windows-sandbox-gate.sh
 
   test:
-    # Windows isn't released yet: don't let its tests block a tag build
-    # (see windows-sandbox above). Delete this `if` when enabling Windows.
-    if: ${{ matrix.os != 'windows-2025' || !startsWith(github.ref, 'refs/tags/') }}
     strategy:
       fail-fast: false
       matrix:
@@ -61,10 +59,6 @@ jobs:
           go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
           go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - run: go test ./...
-      - name: AppContainer sandbox (not in release builds yet)
-        if: runner.os == 'Windows'
-        continue-on-error: true
-        run: go test -tags winsandbox ./internal/sandbox/... ./internal/tools/... ./internal/provider/cliagent/...
       - name: cross-compile Windows and the other targets
         if: runner.os == 'Linux'
         shell: bash

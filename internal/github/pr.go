@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -39,6 +40,30 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 		return "", fmt.Errorf("git %s: %s", args[0], msg)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// Uncommitted counts the files in ws with changes git hasn't committed:
+// modified, added, deleted or untracked (ignored files don't count). The
+// workspace's own config can't run anything: fsmonitor and hooks are off.
+func Uncommitted(ctx context.Context, ws string) (int, error) {
+	out, err := git(ctx, ws, "-c", "core.fsmonitor=false", "-c", "core.hooksPath="+os.DevNull,
+		"status", "--porcelain=v1", "-z", "--untracked-files=all")
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	fields := strings.Split(out, "\x00")
+	for i := 0; i < len(fields); i++ {
+		f := fields[i]
+		if len(f) < 4 {
+			continue
+		}
+		n++
+		if f[0] == 'R' || f[0] == 'C' {
+			i++ // a rename or copy is followed by its old path
+		}
+	}
+	return n, nil
 }
 
 // withGH runs a git command that talks to the remote with gh supplying
