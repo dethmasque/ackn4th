@@ -53,6 +53,9 @@ type Options struct {
 	Setup *Setup
 	// Voice reads the dashboard aloud (v); nil hides it.
 	Voice *Voice
+	// Copy puts text on the system clipboard; nil uses the platform's
+	// tool (pbcopy, wl-copy, xclip, xsel, clip.exe).
+	Copy func(string) error
 	// RoleAdmin is the roles screen (R): add, edit, import and remove
 	// roles; nil hides it.
 	RoleAdmin *Roles
@@ -110,8 +113,14 @@ type model struct {
 	focusMain bool
 	scroll    int
 	follow    bool
-	help      bool
-	frame     int
+	evSel     int     // the activity tab's cursor, when not following
+	open      *detail // the activity event opened with enter
+	drag      *dragSel
+	screen    string // the screen as last drawn, for copying from
+	// copyButton is where the open panel's ⧉ copy button is.
+	copyButton rect
+	help       bool
+	frame      int
 
 	form    *form      // the new-task form, while open
 	setup   *setupView // provider setup, while open
@@ -127,6 +136,7 @@ type model struct {
 	err      error
 
 	speaker   Speaker  // the voice, while on
+	entered   bool     // while speaking: a task or tab was just reached
 	voiceBusy bool     // the voice is starting
 	closed    bool     // the dashboard has quit
 	news      []string // changes to say at the next tick
@@ -219,7 +229,7 @@ func (m *model) current() *Live {
 func (m *model) say(s string) { m.flash, m.flashAt = s, time.Now() }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	before := spoken{flashAt: m.flashAt.UnixNano(), failed: m.failed, field: m.focusedField()}
+	before := spoken{flashAt: m.flashAt.UnixNano(), failed: m.failed, field: m.focusedField(), place: m.place()}
 	res, cmd := m.update(msg)
 	m.speak(msg, before)
 	return res, cmd
@@ -233,6 +243,12 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.roleImported(msg)
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
+		m.drag = nil
+	case copiedMsg:
+		m.copied(msg)
+	case tea.MouseMotionMsg, tea.MouseReleaseMsg:
+		cmd, _ := m.mouse(msg)
+		return m, cmd
 	case tickMsg:
 		m.frame++
 		if m.frame%pollTicks == 0 {
@@ -245,6 +261,15 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setup.idx = min(m.setup.idx, max(0, len(msg)-1))
 		}
 	case tea.KeyPressMsg:
+		// A selection on screen: ctrl+c copies it (and doesn't quit);
+		// any other key clears it.
+		if d := m.drag; d != nil {
+			m.drag = nil
+			if d.done && msg.String() == "ctrl+c" {
+				m.drag = d
+				return m, m.copyDrag()
+			}
+		}
 		if _, typing := m.roles.typingRole(); typing {
 			return m, m.rolesKey(msg.String())
 		}
@@ -310,6 +335,9 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case tea.MouseClickMsg:
+		if cmd, used := m.mouse(msg); used {
+			return m, cmd
+		}
 		// The NEW TASK buttons: atop the task list, or anywhere on the
 		// empty welcome panel.
 		if m.form == nil && m.confirm == "" && msg.Button == tea.MouseLeft {
@@ -320,6 +348,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case tea.MouseWheelMsg:
+		m.drag = nil
 		if msg.Button == tea.MouseWheelUp {
 			m.scrollBy(-3)
 		} else {
@@ -364,6 +393,13 @@ func (m *model) key(k string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	if m.open != nil && k != "ctrl+c" {
+		if k == "c" {
+			return m, m.copySelected()
+		}
+		m.detailKey(k)
+		return m, nil
+	}
 	l := m.current()
 	switch k {
 	case "q", "ctrl+c":
@@ -376,6 +412,12 @@ func (m *model) key(k string) (tea.Model, tea.Cmd) {
 		m.openRoles()
 	case "t":
 		m.replayTour()
+	case "e":
+		if l != nil {
+			m.open = &detail{task: true}
+		}
+	case "c", "y":
+		return m, m.copySelected()
 	case "?":
 		m.help = true
 	case "tab", "shift+tab":
@@ -394,28 +436,33 @@ func (m *model) key(k string) (tea.Model, tea.Cmd) {
 			m.openForm()
 		} else if !m.focusMain {
 			m.focusMain = true
+		} else if m.view == vActivity {
+			m.openDetail()
+		} else if m.view == vOverview && m.agent < 0 {
+			m.open = &detail{task: true} // the summary: the whole task
 		} else if m.view == vOverview && l != nil && len(l.Agents) > 0 {
-			m.agent = max(m.agent, 0)
 			m.view, m.scroll = vAgent, 0
 		}
 	case "up", "k":
 		m.vertical(-1)
 	case "down", "j":
 		m.vertical(1)
-	case "left", "h":
-		m.pickAgent(-1)
-	case "right", "l":
-		m.pickAgent(1)
+	case "left", "h", "right", "l":
+		// Keys move only within the focused pane: from the task list, the
+		// agents are a tab (or enter) away.
+		if m.focusMain {
+			m.pickAgent(map[bool]int{true: -1, false: 1}[k == "left" || k == "h"])
+		}
 	case "[":
 		m.pickTask(-1)
 	case "]":
 		m.pickTask(1)
 	case "pgup", "ctrl+u":
-		m.scrollBy(-m.pageSize())
+		m.vertical(-m.pageSize())
 	case "pgdown", "ctrl+d", "space":
-		m.scrollBy(m.pageSize())
+		m.vertical(m.pageSize())
 	case "home", "g":
-		m.scroll, m.follow = 0, false
+		m.scroll, m.evSel, m.follow = 0, 0, false
 	case "end", "G":
 		m.follow = true
 	case "f":
@@ -474,7 +521,9 @@ func (m *model) vertical(d int) {
 	case !m.focusMain:
 		m.pickTask(d)
 	case m.view == vOverview:
-		m.pickAgent(d)
+		m.pickAgent(max(-1, min(d, 1)))
+	case m.view == vActivity:
+		m.moveEvent(d)
 	default:
 		m.scrollBy(d)
 	}
@@ -504,8 +553,10 @@ func (m *model) pickAgent(d int) {
 	if l == nil || len(l.Agents) == 0 {
 		return
 	}
+	// -1 is "all" in activity and messages, and the task's summary (its
+	// prompt and how it ended) on the overview.
 	lo, n := 0, len(l.Agents)
-	if m.view == vActivity || m.view == vMessages {
+	if m.view == vActivity || m.view == vMessages || m.view == vOverview {
 		lo, n = -1, n+1
 	}
 	m.agent = (m.agent-lo+d+n)%n + lo
@@ -622,7 +673,14 @@ func (m *model) View() tea.View {
 	return v
 }
 
+// render draws the screen, with any mouse selection over it.
 func (m *model) render() string {
+	m.copyButton = rect{}
+	m.screen = m.draw()
+	return m.highlight(m.screen)
+}
+
+func (m *model) draw() string {
 	if m.w == 0 {
 		return "loading…"
 	}
@@ -644,8 +702,13 @@ func (m *model) render() string {
 		screen = m.drawForm(lines)
 	case m.confirm != "" && m.current() != nil:
 		screen = m.drawConfirm(lines)
+	case m.open != nil:
+		block := m.detailBox(m.w, m.h-2)
+		screen = overlay(screen, block, m.w)
+		bh := strings.Count(block, "\n") + 1
+		m.noteCopyButton(block, max(0, (m.w-width(strings.SplitN(block, "\n", 2)[0]))/2), max(0, (m.h-bh)/2))
 	case m.help:
-		screen = overlay(screen, helpBox(m.w, m.opt.Voice != nil), m.w)
+		screen = overlay(screen, helpBox(m.w, m.h, m.opt.Voice != nil), m.w)
 	}
 	return m.drawTip(screen)
 }

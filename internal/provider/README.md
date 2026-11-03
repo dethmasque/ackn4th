@@ -77,6 +77,11 @@ ackn4th start-task --agent backend_dev --agent tech_writer,profile=fast-writer "
 ackn4th run-agent --role code_reviewer --profile deep-review "Review internal/auth"
 ```
 
+Models reason before they act, as much as `effort` allows: they decide how
+much each step needs. Claude (API and Claude Code), Gemini, Codex, Cursor
+and Copilot send a summary of that reasoning, which the dashboard shows
+live and keeps in each task's log. OpenAI's API doesn't share it.
+
 OpenAI has no default model: `ackn4th login --provider openai` (or setup in
 the dashboard) tries the configured one and, if your key can't use it, picks
 the newest chat model that answers a test request and saves it to the

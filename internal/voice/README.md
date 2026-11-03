@@ -69,13 +69,21 @@ The dashboard sends the helper one JSON line per phrase.
 
 sherpa-onnx v2 has no phonemizer for English beyond the lexicon, which
 lacks many inflections ("agent" but not "agents"). So ackn4th phonemizes
-the text itself (`phonemes.go`): words from the lexicon, regular -s, -ed
-and -ing forms derived from it, anything else spelled out. `text.go` first
-rewrites what a lexicon can't say: numbers, task IDs, acronyms, symbols.
+the text itself (`phonemes.go`): words from the lexicon (plus a few
+software words it lacks, like "dev"), regular -s, -ed and -ing forms
+derived from it, compounds of two of its words ("backend" is back + end),
+anything else spelled out. `text.go` first rewrites what a lexicon can't
+say: numbers, task IDs, acronyms, symbols, and names like `TECH_LEAD`,
+which are words, not an acronym.
 
-Phrases are cached as WAV files, so a phrase said before plays at once. A
-new phrase cuts off the one playing, and one superseded within 150 ms is
-never synthesized.
+A phrase is spoken a sentence at a time: the first sentence plays as soon
+as it is synthesized, and the next ones are synthesized while it plays, so
+a long description starts as quickly as a short one. Sentences are cached
+as WAV files, so one said before plays at once. The cache is capped at
+128 MB (a sentence is around 400 KB): when it grows past that, the
+sentences heard least recently are deleted, so the dashboard's own
+phrases stay and one-off text (a task's prompt, an event) ages out. A new phrase cuts off the
+one playing, and one superseded within 150 ms is never synthesized.
 
 ## Updating the engine or model
 

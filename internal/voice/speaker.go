@@ -175,7 +175,7 @@ func Main(args []string) int {
 		defer e.Close()
 		sp := &server{e: e, s: s, cache: filepath.Join(dir, "phrases")}
 		os.MkdirAll(sp.cache, 0o700)
-		wav, err := sp.wav(args[4])
+		wav, err := sp.cached(Normalize(args[4]))
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1

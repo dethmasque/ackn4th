@@ -108,6 +108,9 @@ e2e: build
     "$bin" rename-task "docs PASS" "Docs, again" > /dev/null
     out=$("$bin" show-task "Docs, again"); check "$out" "every agent declared the task done" "finding a task by name"
     out=$("$bin" notes); check "$out" "Mock qa_engineer" "notes"
+    log=$(cat "$ACKN4TH_HOME"/data/tasks/*/events.jsonl)
+    check "$log" '"kind":"reasoning"' "reasoning kept in the log"
+    check "$log" '"detail":"command: ' "tool call arguments kept in the log"
     out=$("$bin" list-tasks); check "$out" "completed" "list-tasks"
     out=$("$bin" dash </dev/null 2>&1 || true); check "$out" "interactive terminal" "dash refuses non-interactive use"
     out=$("$bin" </dev/null 2>&1); check "$out" "start-task" "bare ackn4th prints help off a terminal"

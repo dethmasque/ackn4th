@@ -3,6 +3,7 @@ package dash
 import (
 	"fmt"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -32,27 +33,29 @@ func mix(a, b rgb, t float64) rgb {
 // The phosphor theme: deep green-black surfaces, a terminal-green accent,
 // and a stable accent per provider.
 var (
-	bg0     = hex("#050906") // screen
-	bg1     = hex("#0a120c") // panels
-	bg2     = hex("#101c13") // cards
-	bg3     = hex("#173022") // selection
-	edge    = hex("#1f3a28") // quiet borders
-	text    = hex("#c9f5d0")
-	dim     = hex("#6b8f74")
-	faint   = hex("#3a5442")
-	green   = hex("#39ff6a")
-	lime    = hex("#a6ff9e")
-	moss    = hex("#1f9e48")
-	amber   = hex("#ffb347")
-	cyan    = hex("#5ee7ff")
-	violet  = hex("#c79bff")
-	coral   = hex("#ff8a65")
-	pink    = hex("#b48cff")
-	skyblue = hex("#8cc8ff")
-	neutral = hex("#e6e6e6")
-	grass   = hex("#10a37f")
-	red     = hex("#ff5f6d")
-	white   = hex("#ecfff0")
+	bg0    = hex("#050906") // screen
+	bg1    = hex("#0a120c") // panels
+	bg2    = hex("#101c13") // cards
+	bg3    = hex("#173022") // selection
+	edge   = hex("#1f3a28") // quiet borders
+	text   = hex("#c9f5d0")
+	dim    = hex("#6b8f74")
+	faint  = hex("#3a5442")
+	green  = hex("#39ff6a")
+	lime   = hex("#a6ff9e")
+	moss   = hex("#1f9e48")
+	amber  = hex("#ffb347")
+	cyan   = hex("#5ee7ff")
+	violet = hex("#c79bff")
+	// selection is a mouse selection's background.
+	selection = hex("#2c5d8a")
+	coral     = hex("#ff8a65")
+	pink      = hex("#b48cff")
+	skyblue   = hex("#8cc8ff")
+	neutral   = hex("#e6e6e6")
+	grass     = hex("#10a37f")
+	red       = hex("#ff5f6d")
+	white     = hex("#ecfff0")
 )
 
 // Paint functions reset only what they set (foreground, background, bold),
@@ -223,39 +226,91 @@ func spark(vals []int, c rgb) string {
 	return b.String()
 }
 
-// wrap breaks plain text into lines of at most w cells.
+// wrap breaks text into lines of at most w cells, between words where it
+// can. It keeps the shape of what people and models write: blank lines
+// stay, an indented or list line wraps under its own text, and fenced code
+// keeps its spacing, cut at w instead of reflowed. A word wider than w is
+// split.
 func wrap(s string, w int) []string {
 	if w < 8 {
 		w = 8
 	}
+	s = strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\t", "    ")
 	var out []string
+	code := false
 	for _, para := range strings.Split(s, "\n") {
-		line := ""
-		for _, word := range strings.Fields(para) {
-			for width(word) > w {
-				if line != "" {
-					out = append(out, line)
-					line = ""
-				}
-				out = append(out, ansi.Truncate(word, w, ""))
-				word = ansi.TruncateLeft(word, w, "")
-			}
-			switch {
-			case line == "":
-				line = word
-			case width(line)+1+width(word) <= w:
-				line += " " + word
-			default:
-				out = append(out, line)
-				line = word
-			}
+		if strings.HasPrefix(strings.TrimSpace(para), "```") {
+			code = !code
+			out = append(out, hardwrap(strings.TrimRight(para, " "), w)...)
+			continue
 		}
-		out = append(out, line)
+		if code {
+			out = append(out, hardwrap(strings.TrimRight(para, " "), w)...)
+			continue
+		}
+		out = append(out, wrapLine(para, w)...)
 	}
-	for len(out) > 0 && out[len(out)-1] == "" {
+	for len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
 		out = out[:len(out)-1]
 	}
 	return out
+}
+
+// listMarker is the start of a list item or quote: "- ", "* ", "1. ", "> ".
+var listMarker = regexp.MustCompile(`^(?:[-*+•]|\d{1,3}[.)]|>)\s+`)
+
+// wrapLine wraps one line of prose. Its indent is kept, and the lines it
+// wraps onto line up under its text: after a list marker, if it has one.
+func wrapLine(line string, w int) []string {
+	body := strings.TrimLeft(line, " ")
+	if body == "" {
+		return []string{""}
+	}
+	indent := min(width(line)-width(body), w/2)
+	hang := indent + width(listMarker.FindString(body))
+	if hang > w/2 {
+		hang = indent
+	}
+	var out []string
+	cur, room := strings.Repeat(" ", indent), w-indent
+	used := 0 // cells of words on cur
+	flush := func() {
+		out = append(out, cur)
+		cur, room, used = strings.Repeat(" ", hang), w-hang, 0
+	}
+	for _, word := range strings.Fields(body) {
+		for width(word) > room {
+			if used > 0 {
+				flush()
+				continue
+			}
+			cur += ansi.Truncate(word, room, "")
+			word = ansi.TruncateLeft(word, room, "")
+			used = 1
+			flush()
+		}
+		switch {
+		case used == 0:
+			cur += word
+			used = width(word)
+		case used+1+width(word) <= room:
+			cur += " " + word
+			used += 1 + width(word)
+		default:
+			flush()
+			cur += word
+			used = width(word)
+		}
+	}
+	if used > 0 {
+		out = append(out, cur)
+	}
+	return out
+}
+
+// hardwrap cuts a line every w cells, keeping its spacing.
+func hardwrap(line string, w int) []string {
+	return strings.Split(ansi.Hardwrap(line, w, true), "\n")
 }
 
 // tokens formats a token count like the CLI: 950, 12.4k, 1.2M.

@@ -34,7 +34,24 @@ func loadPhonemizer(lexicon string) (*phonemizer, error) {
 			p.dict[word] = strings.ReplaceAll(phones, " ", "")
 		}
 	}
+	for w, ph := range extraWords {
+		if _, ok := p.dict[w]; !ok {
+			p.dict[w] = ph
+		}
+	}
 	return p, sc.Err()
+}
+
+// extraWords are software words the lexicon lacks, as Kokoro phonemes.
+var extraWords = map[string]string{
+	"dev":    "dˈɛv",
+	"devops": "dˈɛvˌɑps",
+	// compound would split it as fulls tack.
+	"fullstack": "fˈʊlstˌæk",
+	"repo":      "ɹˈipO",
+	"config":    "kˈɑnfɪɡ",
+	"async":     "ˈAsˌɪŋk",
+	"enum":      "ˈinəm",
 }
 
 var (
@@ -88,6 +105,9 @@ func (p *phonemizer) word(w string) string {
 	if ph, ok := p.inflected(w); ok {
 		return ph
 	}
+	if ph, ok := p.compound(w); ok {
+		return ph
+	}
 	if strings.Contains(w, "-") {
 		var parts []string
 		for _, part := range strings.Split(w, "-") {
@@ -104,6 +124,26 @@ func (p *phonemizer) word(w string) string {
 		}
 	}
 	return strings.Join(letters, " ")
+}
+
+// compound reads w as two words the lexicon has: backend is back end,
+// fullstack full stack. The second is stressed less, as in English. Parts
+// of three letters or more only, so a name isn't split into nonsense.
+func (p *phonemizer) compound(w string) (string, bool) {
+	for i := len(w) - 3; i >= 3; i-- {
+		a, aok := p.dict[w[:i]]
+		if !aok {
+			continue
+		}
+		b, bok := p.dict[w[i:]]
+		if !bok {
+			b, bok = p.inflected(w[i:])
+		}
+		if bok {
+			return a + strings.ReplaceAll(b, "ˈ", "ˌ"), true
+		}
+	}
+	return "", false
 }
 
 // inflected finds w as base+suffix, for a base in the lexicon.

@@ -161,7 +161,9 @@ summary.go    the end-of-task report
 
 A task's state lives in `<data>/tasks/<id>/`: `task.json`, its `name`
 (a file of its own, so a rename while a background runner rewrites
-`task.json` isn't lost), the `events.jsonl` transcript, each agent's conversation in `agents/N.json`
+`task.json` isn't lost), the `events.jsonl` transcript (with
+each tool call's arguments, what came back, and the models' reasoning
+summaries, cut to 4 KB each, 16 KB for failures), each agent's conversation in `agents/N.json`
 (what makes resume exact), the frozen project brief (`brief.md`, plus
 `github.md`), workspace snapshots for change digests
 (`agents/N.snapshot.json`, `workspace.json`), and `runner.log` for

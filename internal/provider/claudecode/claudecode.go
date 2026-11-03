@@ -29,6 +29,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dethmasque/ackn4th/internal/provider"
@@ -59,7 +60,12 @@ type Config struct {
 }
 
 // Provider starts Claude Code sessions.
-type Provider struct{ cfg Config }
+type Provider struct {
+	cfg Config
+	// hiddenThinking is set once Claude Code turns out too old for
+	// --thinking-display: its sessions then start without it.
+	hiddenThinking atomic.Bool
+}
 
 // New returns a provider for cfg.
 func New(cfg Config) *Provider { return &Provider{cfg: cfg} }
@@ -226,10 +232,22 @@ func (s *session) SendText(ctx context.Context, text string, st provider.Stream)
 			return nil, err
 		}
 	}
+	msg, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": text}})
+	reply, err := s.send(ctx, msg, st)
+	if errors.Is(err, errHiddenThinking) {
+		reply, err = s.send(ctx, msg, st) // once more, without the flag
+	}
+	return reply, err
+}
+
+// errHiddenThinking is a Claude Code too old for --thinking-display
+// refusing to start; the session retries without it.
+var errHiddenThinking = errors.New("claude-code: this Claude Code can't show its reasoning")
+
+func (s *session) send(ctx context.Context, msg []byte, st provider.Stream) (*provider.Reply, error) {
 	if err := s.start(); err != nil {
 		return nil, err
 	}
-	msg, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": text}})
 	if _, err := s.proc.stdin.Write(append(msg, '\n')); err != nil {
 		return nil, s.died()
 	}
@@ -348,6 +366,11 @@ func (s *session) start() error {
 	if s.p.cfg.Effort != "" {
 		args = append(args, "--effort", s.p.cfg.Effort)
 	}
+	if !s.p.hiddenThinking.Load() {
+		// Without it, -p streams that the model is reasoning but not
+		// what about; summaries are what the dashboard shows as it works.
+		args = append(args, "--thinking-display", "summarized")
+	}
 	if s.id != "" {
 		args = append(args, "--resume", s.id)
 	}
@@ -409,7 +432,12 @@ func (s *session) stop() {
 func (s *session) died() error {
 	msg := "Claude Code exited unexpectedly"
 	if s.proc != nil {
-		if t := strings.TrimSpace(s.proc.stderr.String()); t != "" {
+		t := strings.TrimSpace(s.proc.stderr.String())
+		if strings.Contains(t, "--thinking-display") && !s.p.hiddenThinking.Swap(true) {
+			s.stop()
+			return errHiddenThinking
+		}
+		if t != "" {
 			msg += ": " + t
 		}
 	}

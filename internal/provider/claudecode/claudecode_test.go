@@ -35,6 +35,10 @@ func fakeClaude() {
 		}
 		return ""
 	}
+	if os.Getenv("FAKE_CLAUDE_OLD") == "1" && slices.Contains(args, "--thinking-display") {
+		fmt.Fprintln(os.Stderr, "error: unknown option '--thinking-display'")
+		os.Exit(1)
+	}
 	if slices.Contains(args, "auth") {
 		fmt.Println(`{"loggedIn":true,"authMethod":"claude.ai","email":"op@example.com","subscriptionType":"pro"}`)
 		return
@@ -83,6 +87,9 @@ func fakeClaude() {
 		if tools := string(rpc("tools/list", nil)); !strings.Contains(tools, "read_file") {
 			fmt.Fprintln(os.Stderr, "tools/list:", tools)
 			os.Exit(1)
+		}
+		if flag("--thinking-display") == "summarized" {
+			emit(map[string]any{"type": "stream_event", "event": map[string]any{"type": "content_block_delta", "delta": map[string]any{"type": "thinking_delta", "thinking": "I should read a.txt."}}})
 		}
 		emit(map[string]any{"type": "assistant", "message": map[string]any{"id": "m1", "usage": usage,
 			"content": []any{map[string]any{"type": "text", "text": "Looking."}}}})
@@ -163,6 +170,30 @@ func TestToolCallsReachTheRunner(t *testing.T) {
 	}
 	s2.(*session).stop()
 	s.(*session).stop()
+}
+
+func TestReasoningIsShown(t *testing.T) {
+	for _, old := range []bool{false, true} {
+		p := testProvider(t)
+		if old {
+			// A Claude Code without --thinking-display: the session
+			// starts again without it, and the request still goes through.
+			t.Setenv("FAKE_CLAUDE_OLD", "1")
+		}
+		s := p.NewSession(provider.System{}, []provider.ToolSpec{readFile})
+		var thought strings.Builder
+		r, err := s.SendText(context.Background(), "go", provider.Stream{Thinking: func(s string) { thought.WriteString(s) }})
+		if err != nil || r.StopReason != provider.StopToolUse {
+			t.Fatalf("old %v: %+v, %v", old, r, err)
+		}
+		if want := map[bool]string{false: "I should read a.txt.", true: ""}[old]; thought.String() != want {
+			t.Errorf("old %v: reasoning %q, want %q", old, thought.String(), want)
+		}
+		if p.hiddenThinking.Load() != old {
+			t.Errorf("old %v: hiddenThinking = %v", old, p.hiddenThinking.Load())
+		}
+		s.(*session).stop()
+	}
 }
 
 func TestUsageLimitIsExplained(t *testing.T) {

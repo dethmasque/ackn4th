@@ -10,6 +10,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -62,6 +65,7 @@ func Serve(dir string, s Settings, in io.Reader) error {
 	if err := os.MkdirAll(sp.cache, 0o700); err != nil {
 		return err
 	}
+	go prune(sp.cache, cacheMax)
 
 	cmds := make(chan command, 64)
 	go func() {
@@ -78,15 +82,30 @@ func Serve(dir string, s Settings, in io.Reader) error {
 
 	var (
 		stop     = func() {}
+		speaking <-chan struct{} // open while a phrase plays
 		prefetch []string
 		pending  string
 		due      <-chan time.Time
 	)
+	idle := func() bool {
+		if speaking == nil {
+			return true
+		}
+		select {
+		case <-speaking:
+			return true
+		default:
+			return false
+		}
+	}
 	defer func() { stop() }()
 	for {
-		// Prefetch only while there is nothing to say.
-		if pending == "" && len(prefetch) > 0 && len(cmds) == 0 {
-			sp.wav(prefetch[0])
+		// Prefetch only while there is nothing to say, so it never holds
+		// up what is being said.
+		if pending == "" && len(prefetch) > 0 && len(cmds) == 0 && idle() {
+			for _, part := range chunks(Normalize(prefetch[0])) {
+				sp.cached(part)
+			}
 			prefetch = prefetch[1:]
 			continue
 		}
@@ -108,37 +127,153 @@ func Serve(dir string, s Settings, in io.Reader) error {
 		case <-due:
 			text := pending
 			pending, due = "", nil
-			wav, err := sp.wav(text)
-			if err != nil {
-				continue
-			}
-			// A newer phrase may have come in while this one was synthesized.
-			if len(cmds) > 0 {
-				continue
-			}
 			ctx, cancel := context.WithCancel(context.Background())
 			done := make(chan struct{})
-			go func() { defer close(done); Play(ctx, wav) }()
-			stop = func() { cancel(); <-done }
+			go func() { defer close(done); sp.speak(ctx, text) }()
+			stop, speaking = func() { cancel(); <-done }, done
+		case <-time.After(250 * time.Millisecond):
+			// Look again at prefetching once the phrase has played.
 		}
 	}
 }
 
-type server struct {
-	e     *Engine
-	s     Settings
-	cache string
+// speak says text a sentence at a time: the first starts playing as soon
+// as it is synthesized, and each next one is synthesized while the one
+// before plays. Long descriptions start at once instead of after all of
+// them is ready. ctx ends it, mid-sentence if need be.
+func (sp *server) speak(ctx context.Context, text string) {
+	parts := chunks(Normalize(text))
+	wavs := make(chan string, 1)
+	go func() {
+		defer close(wavs)
+		for _, p := range parts {
+			if ctx.Err() != nil {
+				return
+			}
+			w, err := sp.cached(p)
+			if err != nil {
+				continue
+			}
+			select {
+			case wavs <- w:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	for w := range wavs {
+		if ctx.Err() != nil {
+			continue // let the synthesizer see ctx and stop
+		}
+		Play(ctx, w)
+	}
 }
 
-// wav returns the cached WAV for text, synthesizing it first if needed.
-func (sp *server) wav(text string) (string, error) {
-	text = Normalize(text)
+// chunkMax is about how much text, after the first sentence, is
+// synthesized and played at once: enough that the player's start-up
+// between pieces isn't heard often, little enough to stay ahead of it.
+const chunkMax = 180
+
+// chunks splits normalized text into what speak synthesizes at a time: the
+// first sentence alone, so speech starts quickly, then sentences grouped
+// up to chunkMax characters.
+func chunks(text string) []string {
+	var sentences []string
+	start := 0
+	for i, r := range text {
+		if strings.ContainsRune(".!?", r) && (i+1 == len(text) || text[i+1] == ' ') {
+			if s := strings.TrimSpace(text[start : i+1]); s != "" {
+				sentences = append(sentences, s)
+			}
+			start = i + 1
+		}
+	}
+	if s := strings.TrimSpace(text[start:]); s != "" {
+		sentences = append(sentences, s)
+	}
+	if len(sentences) == 0 {
+		return nil
+	}
+	out := []string{sentences[0]}
+	cur := ""
+	for _, s := range sentences[1:] {
+		if cur != "" && len(cur)+1+len(s) > chunkMax {
+			out = append(out, cur)
+			cur = ""
+		}
+		cur = strings.TrimSpace(cur + " " + s)
+	}
+	if cur != "" {
+		out = append(out, cur)
+	}
+	return out
+}
+
+type server struct {
+	e       *Engine
+	s       Settings
+	cache   string
+	written atomic.Int32 // phrases synthesized, to prune every so often
+	pruning atomic.Bool
+}
+
+// The phrase cache keeps what was said most recently, up to cacheMax: the
+// dashboard's own phrases come back often and stay, while one-off text (a
+// task's prompt, an event) ages out. A phrase is about 400 KB.
+const (
+	cacheMax   = 128 << 20
+	pruneEvery = 64 // new phrases between prunes
+)
+
+// prune deletes the least recently used phrases until the cache fits in
+// max bytes, and leftovers of interrupted writes.
+func prune(dir string, max int64) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	type phrase struct {
+		path string
+		size int64
+		used time.Time
+	}
+	var all []phrase
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		switch filepath.Ext(e.Name()) {
+		case ".wav":
+			all = append(all, phrase{p, info.Size(), info.ModTime()})
+		case ".part":
+			if time.Since(info.ModTime()) > time.Hour {
+				os.Remove(p)
+			}
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].used.After(all[j].used) })
+	var total int64
+	for _, ph := range all {
+		total += ph.size
+		if total > max {
+			os.Remove(ph.path)
+		}
+	}
+}
+
+// cached returns the WAV for normalized text, synthesizing it first if
+// it isn't cached yet.
+func (sp *server) cached(text string) (string, error) {
 	if text == "" {
 		return "", fmt.Errorf("voice: nothing to say")
 	}
 	h := sha256.Sum256(fmt.Appendf(nil, "%s|%d|%.2f|%s", engineVersion, sp.s.sid(), sp.s.speed(), text))
 	p := filepath.Join(sp.cache, hex.EncodeToString(h[:12])+".wav")
 	if _, err := os.Stat(p); err == nil {
+		now := time.Now()
+		os.Chtimes(p, now, now) // used: keep it over older phrases
 		return p, nil
 	}
 	samples, rate, err := sp.e.Synthesize(text, sp.s.sid(), sp.s.speed())
@@ -155,5 +290,11 @@ func (sp *server) wav(text string) (string, error) {
 		return "", err
 	}
 	f.Close()
-	return p, os.Rename(f.Name(), p)
+	if err := os.Rename(f.Name(), p); err != nil {
+		return "", err
+	}
+	if sp.written.Add(1)%pruneEvery == 0 && sp.pruning.CompareAndSwap(false, true) {
+		go func() { defer sp.pruning.Store(false); prune(sp.cache, cacheMax) }()
+	}
+	return p, nil
 }

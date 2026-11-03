@@ -78,15 +78,45 @@ func (m *model) tipKey(k string) bool {
 	}
 	m.opt.Tips.Done(s.id)
 	switch k {
-	case "enter", "space", "esc":
+	case "enter", "space":
+		// The form's tip shows in the form: open it, so ⏎ "next" leads
+		// somewhere.
+		if m.nextInForm(s) {
+			m.openForm()
+		}
+		return true
+	case "esc":
 		return true
 	}
 	return false
 }
 
+// nextInForm reports whether the tip after s is the new-task form's,
+// still unseen and not on screen yet. On a first run the offer to set up
+// providers comes first; the form's tip then waits for the form.
+func (m *model) nextInForm(s tourStep) bool {
+	return s.id != "dash.form" && m.form == nil && m.opt.Launch != nil && m.opt.Tips.Pending("dash.form") &&
+		!m.setupOffered() && (s.id == "dash.tasks" || !m.opt.Tips.Pending("dash.tasks"))
+}
+
+// setupOffered reports whether the offer to set up providers is still to
+// come.
+func (m *model) setupOffered() bool { return m.opt.Setup != nil && m.opt.Setup.Offer }
+
+// tipNext is what ⏎ does on tip s, for its footer.
+func (m *model) tipNext(s tourStep) string {
+	switch {
+	case m.nextInForm(s):
+		return "next, in the new-task form"
+	case s.id == "dash.welcome" && m.opt.Tips.Pending("dash.tasks"), m.setupOffered():
+		return "next"
+	}
+	return "got it"
+}
+
 // tipBox draws a tooltip w cells wide with a pointer on the side facing
 // its target: "left" or "up".
-func tipBox(s tourStep, n int, w int, point string) []string {
+func tipBox(s tourStep, n int, w int, point, next string) []string {
 	surf := hex("#1d2a12")
 	border := fgp(amber)
 	inner := w - 2
@@ -106,7 +136,7 @@ func tipBox(s tourStep, n int, w int, point string) []string {
 	for _, l := range wrap(s.text, inner-2) {
 		lines = append(lines, border("│")+fill(" "+pWhite(l), inner, surf)+border("│"))
 	}
-	foot := pAmber(" ⏎") + pDim(" next · ") + pAmber("ctrl+t") + pDim(" hides tips")
+	foot := pAmber(" ⏎") + pDim(" "+next+" · ") + pAmber("ctrl+t") + pDim(" hides tips")
 	lines = append(lines, border("│")+fill(foot, inner, surf)+border("│"))
 	lines = append(lines, border("╰"+strings.Repeat("─", inner)+"╯"))
 	for i := range lines {
@@ -141,13 +171,13 @@ func (m *model) drawTip(screen string) string {
 	leftW := min(36, max(28, m.w/4))
 	switch s.id {
 	case "dash.welcome":
-		box = tipBox(s, n, w, "left")
+		box = tipBox(s, n, w, "left", m.tipNext(s))
 		x, y = 2+width("+ NEW TASK")+6, top-1
 	case "dash.tasks":
-		box = tipBox(s, n, w, "left")
+		box = tipBox(s, n, w, "left", m.tipNext(s))
 		x, y = leftW-1, top+3
 	case "dash.form":
-		box = tipBox(s, n, w, "up")
+		box = tipBox(s, n, w, "up", m.tipNext(s))
 		fw := min(112, m.w-4)
 		x, y = m.form.x+fw-w-3, m.form.y+m.form.belowAgents
 	}

@@ -2,10 +2,12 @@ package dash
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/dethmasque/ackn4th/internal/task"
 )
@@ -98,6 +100,7 @@ type spoken struct {
 	flashAt int64
 	failed  string
 	field   string // the focused text field, if any
+	place   string // which task and tab
 }
 
 // focusedField names the focused text field, if one is.
@@ -113,6 +116,23 @@ func (m *model) focusedField() string {
 		return ""
 	}
 	return fmt.Sprint(cur)
+}
+
+// place names the task and tab on screen, so speak knows when it changes.
+func (m *model) place() string {
+	// Panels over it (help, the form, details) and zooming into an agent
+	// don't leave it: closing them shouldn't repeat the summary.
+	if !m.focusMain {
+		return ""
+	}
+	id, v := "", m.view
+	if l := m.current(); l != nil {
+		id = l.Task.ID
+	}
+	if v == vAgent {
+		v = vOverview
+	}
+	return fmt.Sprint(id, v)
 }
 
 // speak says what msg changed, if the voice is on.
@@ -148,6 +168,10 @@ func (m *model) speak(msg tea.Msg, before spoken) {
 	default:
 		return
 	}
+	// Arriving at a task, or another of its tabs, also says what the
+	// task is; moving within a tab says only what is selected.
+	m.entered = m.place() != before.place
+	defer func() { m.entered = false }()
 	switch {
 	case isVoice(msg):
 		m.speaker.Say(m.flash + ". " + m.where())
@@ -217,10 +241,20 @@ func (m *model) where() string {
 		return b.String()
 	case m.form != nil:
 		return m.form.where()
+	case m.open != nil:
+		return m.whereDetail()
 	}
-	if s, _, ok := m.tip(); ok {
-		return "Tip: " + s.text + " Enter shows the next tip; control t turns tips off."
+	s := m.whereMain()
+	if tip, _, ok := m.tip(); ok {
+		// The tip comes after the screen, so moving around still says
+		// what is selected first.
+		s += " Tip: " + tip.text + " Enter shows the next tip; control t turns tips off."
 	}
+	return s
+}
+
+// whereMain describes the task list and the open task.
+func (m *model) whereMain() string {
 	l := m.current()
 	if l == nil {
 		if m.opt.Launch != nil {
@@ -231,24 +265,167 @@ func (m *model) where() string {
 	t := l.Task
 	what := fmt.Sprintf("task %s, %s", t.Title(), t.Status)
 	if !m.focusMain {
-		return fmt.Sprintf("Task list, %d of %d: %s. Tab opens it.", m.sel+1, len(m.tasks), what)
+		return fmt.Sprintf("Task list, %d of %d: %s. %s Tab opens it.", m.sel+1, len(m.tasks), what, summary(l, true))
 	}
 	if m.view == vAgent && m.agent >= 0 && m.agent < len(l.Agents) && m.agent < len(t.Agents) {
-		a, spec := l.Agents[m.agent], t.Agents[m.agent]
-		s := fmt.Sprintf("Agent %d of %d: %s on %s, %s.", m.agent+1, len(t.Agents), spec.Role, spec.Provider, a.Phase)
-		if a.Activity != "" {
-			s += " " + a.Activity + "."
-		}
-		return s + " Escape goes back."
+		return m.whereAgent(l, m.agent, true) + " Escape goes back."
 	}
 	s := fmt.Sprintf("%s tab of %s.", strings.ToLower(tabNames[m.view]), what)
-	if m.view == vOverview && len(t.Agents) > 0 {
-		i := max(m.agent, 0)
-		if i < len(t.Agents) {
-			s += fmt.Sprintf(" %d agents; agent %d, %s, is %s. Enter zooms in.", len(t.Agents), i+1, t.Agents[i].Role, l.Agents[i].Phase)
+	if m.entered {
+		// Just arrived: say what the task is before what is selected.
+		s += " " + summary(l, false)
+	}
+	switch m.view {
+	case vOverview:
+		if m.agent < 0 || len(t.Agents) == 0 {
+			s += " The summary is selected: " + t.Prompt + " Enter shows the whole task."
+		} else if i := m.agent; i < len(t.Agents) && i < len(l.Agents) {
+			s += " " + m.whereAgent(l, i, false) + " Enter zooms in."
 		}
+	case vActivity:
+		if evs := filterEvents(l, m.agent); len(evs) > 0 {
+			i := m.selected(len(evs))
+			s += fmt.Sprintf(" Event %d of %d: %s. Enter shows its details.", i+1, len(evs), strings.TrimSpace(ansi.Strip(m.eventLine(l, evs[i]))))
+		} else {
+			s += " No events yet."
+		}
+	case vMessages:
+		s += " " + handoffs(l)
+	case vFiles:
+		s += " " + changedFiles(l)
 	}
 	return s
+}
+
+// whereAgent describes agent i: what it is doing and, zoomed in, what it
+// last handed off.
+func (m *model) whereAgent(l *Live, i int, zoomed bool) string {
+	a, spec := l.Agents[i], l.Task.Agents[i]
+	s := fmt.Sprintf("Agent %d of %d, %s on %s, %s.", i+1, len(l.Task.Agents), spec.Role, spec.Provider, a.Phase)
+	if a.Activity != "" && a.Phase != Idle {
+		s += " " + sentence(a.Activity)
+	}
+	if a.Voted {
+		s += " It says the task is done."
+	}
+	if a.Errors > 0 {
+		s += fmt.Sprintf(" %s failed.", plural(a.Errors, "tool call"))
+	}
+	if zoomed && a.Message != "" {
+		s += " Its latest handoff: " + excerpt(a.Message, 400)
+	}
+	return s
+}
+
+// summary is a task in a few spoken sentences: where it stands, and what
+// it is about (the prompt, cut short in the task list).
+func summary(l *Live, short bool) string {
+	t := l.Task
+	var b strings.Builder
+	if t.MaxRounds > 0 {
+		fmt.Fprintf(&b, "Round %d of %d", min(t.Round, t.MaxRounds), t.MaxRounds)
+	} else {
+		fmt.Fprintf(&b, "Round %d", t.Round)
+	}
+	n := len(t.Agents)
+	fmt.Fprintf(&b, ", %s", plural(n, "agent"))
+	if w := l.Working(); w > 0 {
+		fmt.Fprintf(&b, ", %d working", w)
+	}
+	if v := l.Votes(); v > 0 {
+		fmt.Fprintf(&b, ", %d of %d say done", v, n)
+	}
+	b.WriteString(".")
+	open := 0
+	first := ""
+	for _, td := range t.Todos {
+		if !td.Done {
+			if open == 0 {
+				first = td.Text
+			}
+			open++
+		}
+	}
+	if open > 0 {
+		fmt.Fprintf(&b, " %s for you, the first: %s", plural(open, "open to-do"), excerpt(first, 160))
+	}
+	if t.Reason != "" && t.Status != task.Running {
+		label := "Reason"
+		if t.Status == task.Failed {
+			label = "Failed"
+		}
+		fmt.Fprintf(&b, " %s: %s", label, excerpt(t.Reason, 300))
+	}
+	limit := 400
+	if short {
+		limit = 160
+	}
+	fmt.Fprintf(&b, " Prompt: %s", excerpt(t.Prompt, limit))
+	return b.String()
+}
+
+// handoffs says how many handoffs there are and reads the latest.
+func handoffs(l *Live) string {
+	latest, n := -1, 0
+	for i, a := range l.Agents {
+		if a.Message == "" {
+			continue
+		}
+		n++
+		if latest < 0 || a.MessageRound >= l.Agents[latest].MessageRound {
+			latest = i
+		}
+	}
+	if latest < 0 {
+		return "No handoffs yet."
+	}
+	return fmt.Sprintf("%s handed off. The latest, from agent %d, %s: %s", plural(n, "agent"), latest+1,
+		l.Task.Agents[latest].Role, excerpt(l.Agents[latest].Message, 400))
+}
+
+// changedFiles names the files the agents changed, most recent first.
+func changedFiles(l *Live) string {
+	if len(l.Files) == 0 {
+		return "No files changed yet."
+	}
+	fs := make([]*File, 0, len(l.Files))
+	for _, f := range l.Files {
+		fs = append(fs, f)
+	}
+	sort.Slice(fs, func(i, j int) bool { return fs[i].Last.After(fs[j].Last) })
+	var names []string
+	for _, f := range fs[:min(len(fs), 5)] {
+		names = append(names, f.Path)
+	}
+	s := plural(len(fs), "file") + " changed: " + strings.Join(names, ", ")
+	if len(fs) > 5 {
+		s += fmt.Sprintf(", and %d more", len(fs)-5)
+	}
+	return s + "."
+}
+
+// excerpt is text for speaking: markup dropped, whitespace collapsed, and
+// cut at a word near n characters.
+func excerpt(s string, n int) string {
+	s = strings.NewReplacer("`", "", "**", "", "__", "", "#", "").Replace(ansi.Strip(s))
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > n {
+		cut := strings.LastIndex(s[:n], " ")
+		if cut < n/2 {
+			cut = n
+		}
+		s = strings.TrimRight(s[:cut], ",;:") + ", and more"
+	}
+	return sentence(s)
+}
+
+// sentence ends s with a full stop, so speech pauses after it.
+func sentence(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || strings.ContainsRune(".!?", rune(s[len(s)-1])) {
+		return s
+	}
+	return s + "."
 }
 
 func (m *model) whereSetup() string {

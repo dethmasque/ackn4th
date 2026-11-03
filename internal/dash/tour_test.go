@@ -55,6 +55,27 @@ func TestTourWalksThrough(t *testing.T) {
 			t.Errorf("the key should reach the form, prompt = %q", got)
 		}
 		check("")
+
+		// Enter alone walks the whole tour: on tip 2 it opens the form,
+		// where tip 3 is.
+		opt.Tips = tips.Load(t.TempDir(), true)
+		m = newModel(opt)
+		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		check("next, in the new-task form")
+		m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		if m.form == nil {
+			t.Fatalf("%v: enter on tip 2 should open the form for tip 3", size)
+		}
+		check("TIP 3/3")
+		if !strings.Contains(m.render(), "got it") {
+			t.Errorf("%v: the last tip should say it's the last", size)
+		}
+		m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		if _, _, ok := m.tip(); ok || m.form == nil {
+			t.Errorf("%v: enter on the last tip should only close it", size)
+		}
+
 		opt.Tips = tips.Load(t.TempDir(), true)
 		m = newModel(opt)
 		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})

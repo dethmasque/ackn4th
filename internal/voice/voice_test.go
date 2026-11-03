@@ -15,13 +15,15 @@ import (
 
 func TestNormalize(t *testing.T) {
 	for in, want := range map[string]string{
-		"Task k3f9qz: 3 agents, 12 files":      "Task K three F nine Q Z: three agents, twelve files",
-		"Open the PR via the CLI":              "Open the P R via the C L I",
-		"Round 2/10 · 1,250 tokens":            "Round two of ten, one thousand two hundred fifty tokens",
-		"ackn4th uses 0.5 speed & a TTS voice": "acknowledge forth uses zero point five speed and a T T S voice",
-		"NEW TASK — esc to close":              "new task, esc to close",
-		"the SDKs":                             "the S D Ks",
-		"2026":                                 "two thousand twenty six",
+		"Task k3f9qz: 3 agents, 12 files":        "Task K three F nine Q Z: three agents, twelve files",
+		"Open the PR via the CLI":                "Open the P R via the C L I",
+		"Round 2/10 · 1,250 tokens":              "Round two of ten, one thousand two hundred fifty tokens",
+		"ackn4th uses 0.5 speed & a TTS voice":   "acknowledge forth uses zero point five speed and a T T S voice",
+		"↑↓ picks one, 1-4 switch tabs, ⏎ zooms": "up and down picks one, one to four switch tabs, enter zooms",
+		"task Add tests, and…, running":          "task Add tests, and, running",
+		"NEW TASK — esc to close":                "new task, esc to close",
+		"the SDKs":                               "the S D Ks",
+		"2026":                                   "two thousand twenty six",
 	} {
 		if got := Normalize(in); got != want {
 			t.Errorf("Normalize(%q)\n got %q\nwant %q", in, got, want)
@@ -107,7 +109,7 @@ func TestInstallAndSpeak(t *testing.T) {
 
 func TestPhonemizer(t *testing.T) {
 	lex := filepath.Join(t.TempDir(), "lex.txt")
-	os.WriteFile(lex, []byte("agent ˈ A ʤ ᵊ n t\nopen ˈ O p ᵊ n\nwant w ˈ ɑ n t\nfix f ˈ ɪ k s\nstop s t ˈ ɑ p\nmerge m ˈ ɜ ɹ ʤ\ntry t ɹ ˈ I\nnew n ˈ u\nk k ˈ A\nz z ˈ i\n"), 0o644)
+	os.WriteFile(lex, []byte("agent ˈ A ʤ ᵊ n t\nopen ˈ O p ᵊ n\nwant w ˈ ɑ n t\nfix f ˈ ɪ k s\nstop s t ˈ ɑ p\nmerge m ˈ ɜ ɹ ʤ\ntry t ɹ ˈ I\nnew n ˈ u\nk k ˈ A\nz z ˈ i\nback b ˈ æ k\nend ˈ ɛ n d\n"), 0o644)
 	p, err := loadPhonemizer(lex)
 	if err != nil {
 		t.Fatal(err)
@@ -115,6 +117,7 @@ func TestPhonemizer(t *testing.T) {
 	for w, want := range map[string]string{
 		"Agents": "ˈAʤᵊnts", "opened": "ˈOpᵊnd", "wanted": "wˈɑntᵻd", "fixes": "fˈɪksᵻz", "stopped": "stˈɑpt",
 		"merging": "mˈɜɹʤɪŋ", "tries": "tɹˈIz", "agent's": "ˈAʤᵊnts", "kz": "kˈA zˈi", "new-agent": "nˈu ˈAʤᵊnt",
+		"backend": "bˈækˌɛnd", "backends": "bˈækˌɛndz", "dev": "dˈɛv", "devs": "dˈɛvz", "zend": "zˈi",
 	} {
 		if got := p.word(w); got != want {
 			t.Errorf("%s = %q, want %q", w, got, want)
@@ -123,5 +126,49 @@ func TestPhonemizer(t *testing.T) {
 	got := p.sentences("New agents, opened. Stop!")
 	if len(got) != 2 || got[0] != "nˈu ˈAʤᵊnts, ˈOpᵊnd." || got[1] != "stˈɑp!" {
 		t.Errorf("sentences = %q", got)
+	}
+}
+
+func TestChunks(t *testing.T) {
+	long := strings.Repeat("Agent two is idle. ", 20)
+	got := chunks("Task toilet rush, done. " + long + "Tab opens it")
+	if got[0] != "Task toilet rush, done." {
+		t.Errorf("the first sentence should come alone, so speech starts at once: %q", got[0])
+	}
+	if last := got[len(got)-1]; !strings.HasSuffix(last, "Tab opens it") {
+		t.Errorf("the end was lost: %q", last)
+	}
+	if strings.Join(got, " ") != strings.TrimSpace("Task toilet rush, done. "+long+"Tab opens it") {
+		t.Error("chunks dropped or changed text")
+	}
+	for _, c := range got[1:] {
+		if len(c) > chunkMax+len("Agent two is idle.") {
+			t.Errorf("a chunk of %d characters", len(c))
+		}
+	}
+	if chunks("") != nil || len(chunks("one point five")) != 1 {
+		t.Error("short text should be one chunk")
+	}
+}
+
+// The phrase cache stays under its cap, keeping the most recently used.
+func TestPrune(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	for i, name := range []string{"old.wav", "mid.wav", "new.wav", "stale.part", "fresh.part"} {
+		p := filepath.Join(dir, name)
+		os.WriteFile(p, make([]byte, 100), 0o644)
+		age := time.Duration(5-i) * time.Hour
+		if name == "fresh.part" {
+			age = time.Minute
+		}
+		os.Chtimes(p, now.Add(-age), now.Add(-age))
+	}
+	prune(dir, 250)
+	for name, keep := range map[string]bool{"old.wav": false, "mid.wav": true, "new.wav": true, "stale.part": false, "fresh.part": true} {
+		_, err := os.Stat(filepath.Join(dir, name))
+		if (err == nil) != keep {
+			t.Errorf("%s: kept %v, want %v", name, err == nil, keep)
+		}
 	}
 }

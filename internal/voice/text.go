@@ -41,6 +41,12 @@ var (
 	punctRE  = regexp.MustCompile(`\s+([,.:;!?])`)
 	groupRE  = regexp.MustCompile(`(\d),(\d{3})\b`)
 	ofRE     = regexp.MustCompile(`(\d)\s*/\s*(\d)`)
+	rangeRE  = regexp.MustCompile(`\b(\d)-(\d)\b`)
+	// snake_case and SCREAMING_SNAKE names, e.g. roles: TECH_LEAD.
+	// Roles joined with "+" (backend_dev+qa_engineer) are one agent with
+	// both: read "and"; between numbers "+" stays "plus".
+	joinRE  = regexp.MustCompile(`([A-Za-z_])\s*\+\s*([A-Za-z_])`)
+	snakeRE = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b`)
 )
 
 // Words the lexicon has that look like acronyms.
@@ -55,6 +61,8 @@ var spoken = map[string]string{
 // symbols are read as words.
 var symbols = strings.NewReplacer(
 	"&", " and ", "+", " plus ", "%", " percent", "@", " at ", "#", " number ",
+	"↑↓", " up and down ", "←→", " left and right ", "↑", " up ", "↓", " down ", "←", " left ",
+	"⏎", " enter ", "{", "", "}", "", "…,", ",", "….", ".",
 	"/", " slash ", "→", ", ", "·", ", ", "—", ", ", "–", ", ", "…", ".",
 	"_", " ", "`", "", "*", "", "|", ", ", "[", "", "]", "", "<", "", ">", "",
 	"ackn4th", "acknowledge forth",
@@ -65,7 +73,15 @@ func Normalize(s string) string {
 	for groupRE.MatchString(s) {
 		s = groupRE.ReplaceAllString(s, "$1$2")
 	}
-	s = ofRE.ReplaceAllString(s, "$1 of $2") // round 2/10
+	for joinRE.MatchString(s) {
+		s = joinRE.ReplaceAllString(s, "$1 and $2")
+	}
+	// A name like TECH_LEAD is words, not an acronym: read it as tech lead.
+	s = snakeRE.ReplaceAllStringFunc(s, func(w string) string {
+		return strings.ReplaceAll(strings.ToLower(w), "_", " ")
+	})
+	s = ofRE.ReplaceAllString(s, "$1 of $2")    // round 2/10
+	s = rangeRE.ReplaceAllString(s, "$1 to $2") // 1-4 switch tabs
 	s = symbols.Replace(s)
 	s = mixedRE.ReplaceAllStringFunc(s, spell)
 	s = acronymRE.ReplaceAllStringFunc(s, func(w string) string {

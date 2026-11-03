@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/dethmasque/ackn4th/internal/task"
+	"github.com/dethmasque/ackn4th/internal/tips"
 )
 
 type fakeSpeaker struct{ said []string }
@@ -53,7 +54,7 @@ func TestVoiceReadsTheDashboard(t *testing.T) {
 	}
 	steps := []struct{ key, want string }{
 		{"tab", "overview tab of task Add DELETE"},
-		{"?", "Keys. up, down, j, k: select task"},
+		{"?", "Keys. up, down, j, k: select a task"},
 		{"esc", "overview tab"},
 		{"n", "New task. Prompt, text field: empty"},
 		{"h", ""}, // typing isn't echoed
@@ -114,5 +115,82 @@ func TestVoiceOfferedAtWelcome(t *testing.T) {
 		if m.setup == nil || !strings.Contains(sp.last(), "Set up providers now? Set up selected") {
 			t.Errorf("said %q", sp.last())
 		}
+	}
+}
+
+// With the voice alone you can tell what a task is: the list and the task
+// say its state, open to-dos and prompt, and a tip on screen comes after
+// that instead of in place of it.
+func TestVoiceSummarizesTasks(t *testing.T) {
+	t.Setenv(tips.Env, "")
+	var launched []NewTask
+	opt := formOptions(fixture(t), &launched)
+	opt.Tips = tips.Load(t.TempDir(), true)
+	opt.Tips.Done("dash.welcome")
+	m := newModel(opt)
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	sp := &fakeSpeaker{}
+	m.speaker = sp
+	if _, _, ok := m.tip(); !ok {
+		t.Fatal("expected the task-list tip on screen")
+	}
+
+	said := m.where()
+	for _, want := range []string{"Task list, 1 of 1: task Add DELETE", "Round 1 of 10", "1 open to-do", "Decide whether DELETE", "Prompt: Add DELETE"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("task list: want %q in %q", want, said)
+		}
+	}
+	if i, j := strings.Index(said, "Prompt:"), strings.Index(said, "Tip:"); j < 0 || i > j {
+		t.Errorf("the tip should follow the description: %q", said)
+	}
+
+	opt.Tips.Done("dash.tasks")
+	m.Update(keyMsg("tab"))
+	if !strings.Contains(sp.last(), "overview tab of task Add DELETE") || !strings.Contains(sp.last(), "Round 1 of 10") {
+		t.Errorf("entering the task should summarize it: %q", sp.last())
+	}
+	m.Update(keyMsg("j"))
+	if strings.Contains(sp.last(), "Round 1") || !strings.Contains(sp.last(), "Agent 2 of") {
+		t.Errorf("moving within the tab should say only the selection: %q", sp.last())
+	}
+	m.Update(keyMsg("4"))
+	if !strings.Contains(sp.last(), "messages tab") || !strings.Contains(sp.last(), "handed off") && !strings.Contains(sp.last(), "No handoffs") {
+		t.Errorf("messages tab: %q", sp.last())
+	}
+}
+
+func TestExcerpt(t *testing.T) {
+	got := excerpt("## Done\n\nAdded `DELETE` and **tests**. "+strings.Repeat("word ", 100), 60)
+	if strings.ContainsAny(got, "#`*\n") || !strings.HasSuffix(got, "and more.") || len(got) > 80 {
+		t.Errorf("%q", got)
+	}
+	if excerpt("short", 60) != "short." {
+		t.Error(excerpt("short", 60))
+	}
+}
+
+// Keys move only within the focused pane: on the task list, ←→ don't pick
+// agents in the task's flow.
+func TestArrowsStayInFocusedPane(t *testing.T) {
+	m := newModel(Options{Store: fixture(t)})
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	if m.focusMain {
+		t.Fatal("the task list should have focus on load")
+	}
+	start := m.agent
+	for _, k := range []tea.KeyPressMsg{{Code: tea.KeyRight}, {Code: tea.KeyLeft}, {Code: 'l', Text: "l"}} {
+		m.Update(k)
+		if m.agent != start || m.focusMain {
+			t.Fatalf("%s moved to agent %d (focus on task: %v)", k, m.agent, m.focusMain)
+		}
+	}
+	if footer := ansi.Strip(m.footer()); strings.Contains(footer, "agent") {
+		t.Errorf("the list's footer offers agent keys: %q", footer)
+	}
+	m.Update(keyMsg("tab"))
+	m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if m.agent == start {
+		t.Error("in the task's pane, → should pick the next agent")
 	}
 }

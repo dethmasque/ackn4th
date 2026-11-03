@@ -5,7 +5,10 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -163,9 +166,21 @@ func consensus(parallel bool) string {
 // stopped task can resume exactly where it left off.
 func (a *Agent) Turn(ctx context.Context, input string, persist func() error) (TurnResult, error) {
 	var res TurnResult
+	// The reasoning streamed during one model response, saved to the log
+	// once the response is done.
+	var reasoning strings.Builder
+	saveReasoning := func() {
+		if r := strings.TrimSpace(reasoning.String()); r != "" {
+			a.emit(event.Event{Kind: event.Reasoning, Text: event.Clip(r, event.DetailMax)})
+		}
+		reasoning.Reset()
+	}
 	stream := provider.Stream{
-		Text:     func(s string) { a.emit(event.Event{Kind: event.Delta, Text: s}) },
-		Thinking: func(s string) { a.emit(event.Event{Kind: event.Thinking, Text: s}) },
+		Text: func(s string) { a.emit(event.Event{Kind: event.Delta, Text: s}) },
+		Thinking: func(s string) {
+			reasoning.WriteString(s)
+			a.emit(event.Event{Kind: event.Thinking, Text: s})
+		},
 		ToolInput: func(name, chunk string) {
 			a.emit(event.Event{Kind: event.ToolInput, Tool: name, Text: chunk})
 		},
@@ -189,7 +204,9 @@ func (a *Agent) Turn(ctx context.Context, input string, persist func() error) (T
 			input += "\n\n" + mail
 		}
 		var err error
-		if reply, err = a.Session.SendText(ctx, input, stream); err != nil {
+		reply, err = a.Session.SendText(ctx, input, stream)
+		saveReasoning()
+		if err != nil {
 			return res, err
 		}
 		ack()
@@ -230,9 +247,13 @@ func (a *Agent) Turn(ctx context.Context, input string, persist func() error) (T
 				return a.finish(res), nil
 			}
 			for _, call := range reply.ToolCalls {
-				a.emit(event.Event{Kind: event.ToolCall, Tool: call.Name, Text: tools.Summarize(call)})
+				a.emit(event.Event{Kind: event.ToolCall, Tool: call.Name, Text: tools.Summarize(call), Detail: callDetail(call)})
 				r := a.Exec.Run(ctx, call)
-				a.emit(event.Event{Kind: event.ToolResult, Tool: call.Name, Text: r.Summary, Error: r.IsError})
+				limit := event.DetailMax
+				if r.IsError {
+					limit = event.ErrorDetailMax
+				}
+				a.emit(event.Event{Kind: event.ToolResult, Tool: call.Name, Text: r.Summary, Detail: event.Clip(r.Content, limit), Error: r.IsError})
 				if r.Done {
 					res.Done, res.DoneSummary = true, r.DoneSummary
 					a.emit(event.Event{Kind: event.DoneVote, Text: r.DoneSummary})
@@ -273,7 +294,9 @@ func (a *Agent) Turn(ctx context.Context, input string, persist func() error) (T
 			extra = strings.TrimSpace(mail + "\n\n" + extra)
 		}
 		var err error
-		if reply, err = a.Session.SendToolResults(ctx, results, extra, stream); err != nil {
+		reply, err = a.Session.SendToolResults(ctx, results, extra, stream)
+		saveReasoning()
+		if err != nil {
 			return res, err
 		}
 		ack()
@@ -281,6 +304,29 @@ func (a *Agent) Turn(ctx context.Context, input string, persist func() error) (T
 			return res, err
 		}
 	}
+}
+
+// callDetail is a tool call's arguments for the log, one per line and
+// strings as they are (a command, a file's new contents), up to DetailMax.
+func callDetail(call provider.ToolCall) string {
+	var args map[string]any
+	if json.Unmarshal(call.Input, &args) != nil {
+		return event.Clip(string(call.Input), event.DetailMax)
+	}
+	var b strings.Builder
+	for _, k := range slices.Sorted(maps.Keys(args)) {
+		v, ok := args[k].(string)
+		if !ok {
+			j, _ := json.Marshal(args[k])
+			v = string(j)
+		}
+		if strings.Contains(v, "\n") {
+			fmt.Fprintf(&b, "%s:\n%s\n", k, v)
+		} else {
+			fmt.Fprintf(&b, "%s: %s\n", k, v)
+		}
+	}
+	return event.Clip(strings.TrimRight(b.String(), "\n"), event.DetailMax)
 }
 
 func (a *Agent) inbox() (string, func()) {

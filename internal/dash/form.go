@@ -192,6 +192,7 @@ type form struct {
 	// belowAgents is the form's row under the last agent row, and x, y
 	// where the form was drawn: the walkthrough's tooltip points there.
 	belowAgents, x, y int
+	promptW           int // the prompt editor's width when last drawn
 }
 
 type launchedMsg struct {
@@ -350,6 +351,9 @@ func (f *form) key(k string) (cmd tea.Cmd, done bool) {
 		return nil, false
 	}
 	cur := f.current()
+	if cur.kind == "prompt" && (k == "up" || k == "down") && f.promptLine(k == "up") {
+		return nil, false
+	}
 	if k == "f1" {
 		f.help = true
 		return nil, false
@@ -737,6 +741,7 @@ func (f *form) render(m *model, w, maxH int) string {
 	// Fit the height: drop spacing first, then shrink the prompt, then
 	// scroll the agent rows.
 	pw := inner - 2
+	f.promptW = pw
 	plines := editorLines(f.prompt, pw, focused("prompt", 0))
 	if f.prompt.String() == "" && !focused("prompt", 0) {
 		plines = []string{pFaint("Describe the task, e.g. “Add rate limiting to the API, with tests”")}
@@ -917,23 +922,88 @@ func cmpOr(s, def string) string {
 	return s
 }
 
+// promptLine moves the prompt's cursor to the wrapped line above or
+// below, keeping its column; it reports false on the first or last line,
+// where the arrow keys move between fields instead.
+func (f *form) promptLine(up bool) bool {
+	in := &f.prompt
+	spans := softWrap(in.r, max(f.promptW, 8)-1)
+	at := cursorLine(*in, max(f.promptW, 8))
+	to := at + 1
+	if up {
+		to = at - 1
+	}
+	if to < 0 || to >= len(spans) {
+		return false
+	}
+	col := ansi.StringWidth(string(in.r[spans[at][0]:in.cur]))
+	in.cur = spans[to][0]
+	for w := 0; in.cur < spans[to][1]; in.cur++ {
+		cw := ansi.StringWidth(string(in.r[in.cur]))
+		if w+cw > col {
+			break
+		}
+		w += cw
+	}
+	// A soft-wrapped line's end is the next line's start: stay on this one.
+	if in.cur == spans[to][1] && to < len(spans)-1 && in.cur > spans[to][0] && in.r[in.cur-1] != '\n' && spans[to+1][0] == in.cur {
+		in.cur--
+	}
+	return true
+}
+
 // cursorLine is the wrapped line the editor's cursor is on.
 func cursorLine(in input, w int) int {
-	line, col := 0, 0
-	for i := 0; i < in.cur && i < len(in.r); i++ {
-		if in.r[i] == '\n' {
-			line, col = line+1, 0
-			continue
+	spans := softWrap(in.r, w-1)
+	for i, sp := range spans {
+		if in.cur >= sp[0] && (in.cur < sp[1] || in.cur == sp[1] && (sp[1] == len(in.r) || in.r[sp[1]] == '\n')) {
+			return i
 		}
-		if col >= w-1 {
-			line, col = line+1, 0
+	}
+	return len(spans) - 1
+}
+
+// softWrap lays text out in lines of at most limit cells, as [start, end)
+// rune spans. Lines break after a space where they can; the space stays at
+// the line's end (the editor keeps a spare column for it and the cursor).
+// A word wider than a line is split. A newline ends a line and belongs to
+// none.
+func softWrap(r []rune, limit int) [][2]int {
+	limit = max(limit, 1)
+	var spans [][2]int
+	start := 0
+	for {
+		col, brk, i := 0, -1, start
+		for ; i < len(r) && r[i] != '\n'; i++ {
+			cw := max(1, ansi.StringWidth(string(r[i])))
+			if col+cw > limit {
+				break
+			}
+			if r[i] == ' ' {
+				brk = i + 1
+			}
+			col += cw
 		}
-		col++
+		switch {
+		case i == len(r):
+			return append(spans, [2]int{start, i})
+		case r[i] == '\n':
+			spans = append(spans, [2]int{start, i})
+			start = i + 1
+		default: // the line is full at i
+			end := i
+			switch {
+			case r[i] == ' ':
+				end = i + 1
+			case brk > start:
+				end = brk
+			case i == start:
+				end = i + 1 // one character wider than the line
+			}
+			spans = append(spans, [2]int{start, end})
+			start = end
+		}
 	}
-	if col >= w-1 {
-		line++
-	}
-	return line
 }
 
 // box draws the open dropdown, at most maxRows choices tall, with a
@@ -1005,41 +1075,28 @@ func (f *form) dropOpen(kind string, agent int) bool {
 	return f.drop != nil && f.drop.owner == field{kind, agent}
 }
 
-// editorLines wraps an editor's text, with a block cursor when focused.
+// editorLines wraps an editor's text between words, with a block cursor
+// when focused.
 func editorLines(in input, w int, focused bool) []string {
 	r := in.r
+	cursor := onp(lime)
 	var lines []string
-	var line strings.Builder
-	col := 0
-	flush := func() { lines = append(lines, line.String()); line.Reset(); col = 0 }
-	for i := 0; i <= len(r); i++ {
-		atCursor := focused && i == in.cur
-		if i == len(r) {
-			if atCursor {
-				line.WriteString(onp(lime)(fgp(bg0)(" ")))
+	for _, sp := range softWrap(r, w-1) {
+		var b strings.Builder
+		for i := sp[0]; i < sp[1]; i++ {
+			if focused && i == in.cur {
+				b.WriteString(cursor(fgp(bg0)(string(r[i]))))
+			} else {
+				b.WriteString(pText(string(r[i])))
 			}
-			break
 		}
-		ch := r[i]
-		if ch == '\n' {
-			if atCursor {
-				line.WriteString(onp(lime)(fgp(bg0)(" ")))
-			}
-			flush()
-			continue
+		// The cursor after a line's last character: at a newline or the
+		// end of the text.
+		if focused && in.cur == sp[1] && (sp[1] == len(r) || r[sp[1]] == '\n') {
+			b.WriteString(cursor(fgp(bg0)(" ")))
 		}
-		if col >= w-1 {
-			flush()
-		}
-		s := string(ch)
-		if atCursor {
-			line.WriteString(onp(lime)(fgp(bg0)(s)))
-		} else {
-			line.WriteString(pText(s))
-		}
-		col++
+		lines = append(lines, b.String())
 	}
-	flush()
 	return lines
 }
 

@@ -44,6 +44,9 @@ while a task runs. Quitting it never stops a task.
 - **1 Overview:** the workflow (turn order with who's up next, or parallel
   lanes), consensus so far, and a live card per agent: what it's doing
   right now and for how long, its model, context use and cache hit rate.
+  The prompt and how the task ended are cut to fit. Like an agent card,
+  that summary can be selected (`↑` from the first agent) and **enter**
+  opens the task in full, scrollable; `e` does the same from anywhere.
 - **Enter** zooms into an agent: settings, usage, its latest handoff, recent
   tool calls and the files it changed. While it works, **LIVE** shows what
   its model is writing right now: the end of a file as it streams into a
@@ -53,8 +56,28 @@ while a task runs. Quitting it never stops a task.
   8.2 KB so far`). Gemini replies all at once, so it has nothing live to
   show.
 - **2 Activity** is the full log, filterable by agent (`←→`), following new
-  events (`f`). **3 Files** lists every file agents changed, by whom and
-  how. **4 Messages** is every handoff, by round.
+  events (`f`). A long line wraps onto up to three. `↑↓` select a line and **enter** opens it with everything
+  the log has on it: for a tool call or a failure, the agent's reasoning
+  just before, the call's arguments in full (a whole command, say) and
+  what came back to the model. `←→` step to the previous or next event,
+  esc closes. **3 Files** lists every file agents changed, by whom and
+  how. **4 Messages** is every handoff, by round, in full.
+
+**Copying.** The dashboard uses the mouse, which turns off the terminal's
+own text selection, so it has its own: drag over text to select it, and
+it is copied when you let go (ctrl+c or a right-click copy it again). A
+right-click with nothing selected copies the line under the pointer.
+**`c`** copies whatever is selected in full rather than what fits on
+screen: an activity line with all its details, the open panel (which also
+has a **⧉ copy** button), the task's summary, an agent's latest handoff,
+or, from the task list, the task's ID. Text goes to the system clipboard
+(`pbcopy`, `wl-copy`, `xclip`, `xsel` or `clip.exe`) and to the
+terminal's own (OSC 52), which is what works over SSH. Holding Option
+(macOS) or Shift usually brings back the terminal's own selection.
+
+Text wraps between words and keeps the shape agents and people give it:
+list items wrap under their own text, indentation and blank lines stay,
+and fenced code keeps its spacing.
 - **FOR YOU** lists the action items agents left for you as they worked:
   decisions only you can make, credentials, manual steps, things they
   couldn't verify.
@@ -65,8 +88,10 @@ while a task runs. Quitting it never stops a task.
 | --- | --- |
 | `↑ ↓` `j k` | select a task · select an agent (overview) · scroll |
 | `tab` | switch between the task list and the task panel |
-| `← →` `h l` | select an agent; in activity and messages, filter |
-| `⏎` | open the task · zoom into the selected agent |
+| `← →` `h l` | in a task: select an agent; in activity and messages, filter (the task list ignores them) |
+| `⏎` | open the task · zoom into an agent · an activity line's details |
+| `e` | the task in full: its whole prompt, why it stopped, every to-do |
+| `c` | copy what's selected, in full (drag to select text; right-click copies a line) |
 | `esc` | back |
 | `1` – `4` | overview · activity · files · messages |
 | `[` `]` | previous / next task from anywhere |
@@ -138,7 +163,13 @@ up in the new-task form at once. See [roles](../../roles/README.md).
 
 With the voice on (`v`, or `ackn4th voice on`), the dashboard says where you
 are after each key: the screen, what is selected, a form field and its
-value, a dialog and which button is selected, a tooltip, the list of keys.
+value, a dialog and which button is selected, the list of keys. A task is
+summarized, in the task list and when you reach it or another of its tabs:
+its round, how many agents are working or say it's done, the to-dos open
+for you, why it stopped or failed, and its prompt. Moving within a tab says
+only what is selected: an agent and what it is doing, an event, the
+latest handoff, the files changed. A tooltip on screen is read after all
+that.
 Between keys it says what changed: a task finished or failed, a message
 flashed. It doesn't echo typing: a text field is read when you reach it.
 A newer phrase cuts off an older one, and holding an arrow key speaks only
@@ -150,6 +181,8 @@ where you stop. `V` repeats the last phrase. How it works:
 ```
 model.go    the Bubble Tea model: keys, polling task records, dialogs
 views.go    the task list, tabs, help panel and footer
+detail.go   an activity line's details, and the task in full (e)
+clipboard.go copying: c, the ⧉ button, mouse selection
 draw.go     panels, buttons and colors; pixel.go the header art
 state.go    each task's live state, derived from its events
 form.go     the new-task form

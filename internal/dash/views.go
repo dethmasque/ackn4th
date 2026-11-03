@@ -150,8 +150,19 @@ func (m *model) footer() string {
 	case m.flash != "" && time.Since(m.flashAt) < 4*time.Second:
 		return fill(" "+pAmber("▸ ")+pText(m.flash), m.w, bg0)
 	}
-	keys := [][2]string{{"↑↓", "move"}, {"tab", "panel"}, {"←→", "agent"}, {"⏎", "zoom"}, {"1-4", "tabs"}, {"[ ]", "task"}, {"f", "follow"}, {"s", "stop"}, {"r", "resume"}, {"x", "delete"}, {"n", "new"}, {"p", "providers"}, {"R", "roles"}, {"t", "tour"}, {"?", "help"}, {"q", "quit"}}
-	if m.opt.Voice != nil {
+	keys := [][2]string{{"↑↓", "move"}, {"tab", "panel"}, {"←→", "agent"}, {"⏎", "zoom"}, {"e", "expand"}, {"c", "copy"}, {"1-4", "tabs"}, {"[ ]", "task"}, {"f", "follow"}, {"s", "stop"}, {"r", "resume"}, {"x", "delete"}, {"n", "new"}, {"p", "providers"}, {"R", "roles"}, {"t", "tour"}, {"?", "help"}, {"q", "quit"}}
+	switch {
+	case m.open != nil && m.open.task:
+		keys = [][2]string{{"↑↓", "scroll"}, {"c", "copy it all"}, {"esc", "close"}}
+	case m.open != nil:
+		keys = [][2]string{{"↑↓", "scroll"}, {"←→", "previous / next event"}, {"c", "copy it all"}, {"esc", "close"}}
+	case m.focusMain && m.view == vActivity:
+		keys[0], keys[3] = [2]string{"↑↓", "select"}, [2]string{"⏎", "details"}
+	case !m.focusMain:
+		// The task list: ←→ and zooming belong to the task's pane.
+		keys = append([][2]string{{"↑↓", "task"}, {"⏎ tab", "open it"}}, keys[4:]...)
+	}
+	if m.opt.Voice != nil && m.open == nil {
 		keys = append(keys[:len(keys)-2:len(keys)-2], [2]string{"v", "voice"}, keys[len(keys)-2], keys[len(keys)-1])
 	}
 	var b strings.Builder
@@ -359,14 +370,42 @@ func (m *model) scrolled(lines []string, h int) []string {
 // overview: the summary, the workflow, agent cards and recent activity.
 func (m *model) overview(l *Live, w, h int) []string {
 	t := l.Task
-	var out []string
-	for i, line := range wrap(t.Prompt, w-1) {
-		if i == 2 {
-			out[len(out)-1] += pDim(" …")
-			break
+	// The summary (prompt, and how the task ended) is cut to fit. Like an
+	// agent card it can be selected (↑ from the first agent), and enter
+	// then shows all of it.
+	picked := m.focusMain && m.agent < 0
+	mark := func(lines []string) []string {
+		if !picked {
+			return lines
 		}
-		out = append(out, bold(pWhite(line)))
+		for i := range lines {
+			lines[i] = fill(lines[i], w-1, bg3)
+		}
+		return lines
 	}
+	var out []string
+	lines := wrap(t.Prompt, w-1)
+	cut := len(lines) > 2
+	if cut {
+		lines = lines[:2]
+	}
+	var prompt []string
+	for i, l := range lines {
+		if i < len(lines)-1 {
+			prompt = append(prompt, bold(pWhite(l)))
+			continue
+		}
+		more, hint := "", ""
+		if cut {
+			more = pDim(" …")
+		}
+		if picked {
+			hint = "  " + pLime("⏎ shows it all")
+		}
+		l = ansi.Truncate(l, w-1-width(more)-width(hint), "")
+		prompt = append(prompt, bold(pWhite(l))+more+hint)
+	}
+	out = append(out, mark(prompt)...)
 	u := t.Usage()
 	stats := pill("TURNS", bg2, lime)
 	if t.Parallel() {
@@ -392,15 +431,16 @@ func (m *model) overview(l *Live, w, h int) []string {
 		}
 		reason := wrap(oneLine(t.Reason), w-2)
 		if len(reason) > 3 {
-			reason = append(reason[:2], fit(reason[2], w-3)+"…")
+			reason = append(reason[:2], ansi.Truncate(reason[2], w-6, "")+" …")
 		}
 		for i, r := range reason {
-			mark := "  "
+			lead := "  "
 			if i == 0 {
-				mark = "▸ "
+				lead = "▸ "
 			}
-			out = append(out, col(mark+r))
+			reason[i] = col(lead + r)
 		}
+		out = append(out, mark(reason)...)
 	}
 	if (t.Status == task.Failed || t.Status == task.Stopped) && m.opt.Resume != nil {
 		out = append(out, pDim("  press ")+pill("r", bg3, lime)+pDim(" to resume where it left off"))
@@ -429,7 +469,7 @@ func (m *model) overview(l *Live, w, h int) []string {
 		out = append(out, "", bold(pAmber(fmt.Sprintf("FOR YOU · %d open", len(open))))+pDim("  ·  what the agents need from you"))
 		for j, td := range open {
 			if j == 6 {
-				out = append(out, pDim(fmt.Sprintf("  … %d more · all of them: ackn4th show-task %s", len(open)-j, t.ID)))
+				out = append(out, pDim(fmt.Sprintf("  … %d more", len(open)-j)))
 				break
 			}
 			by := "  " + td.By
@@ -439,7 +479,7 @@ func (m *model) overview(l *Live, w, h int) []string {
 
 	// Whatever height is left shows the latest activity.
 	if left := h - len(out) - 2; left > 2 {
-		out = append(out, "", bold(pLime("LATEST"))+pDim("  ·  2 for the full log"))
+		out = append(out, "", bold(pLime("LATEST"))+pDim("  ·  2 for the full log, where ⏎ opens any line"))
 		evs := filterEvents(l, -1)
 		for _, e := range evs[max(0, len(evs)-left):] {
 			out = append(out, m.eventLine(l, e))
@@ -596,26 +636,48 @@ func ago(t time.Time) string {
 // all (-1).
 func filterEvents(l *Live, agent int) []event.Event {
 	var out []event.Event
-	for _, e := range l.Events {
-		if e.Kind == event.ToolResult && !e.Error {
-			continue
-		}
-		if agent >= 0 && e.Agent != agent+1 && !(e.Agent == 0 && e.Kind != event.Notice) {
-			continue
-		}
-		out = append(out, e)
+	for _, i := range eventIdx(l, agent) {
+		out = append(out, l.Events[i])
 	}
 	return out
 }
 
 // eventLine renders one event on a line, like the CLI's live output.
 func (m *model) eventLine(l *Live, e event.Event) string {
+	lead, what := m.eventParts(l, e)
+	return lead + what
+}
+
+// eventLines renders one event in at most n lines of w cells: what
+// happened wraps under itself, after the time and who.
+func (m *model) eventLines(l *Live, e event.Event, w, n int) []string {
+	lead, what := m.eventParts(l, e)
+	lw := width(lead)
+	if w-lw < 16 {
+		return []string{lead + what}
+	}
+	lines := strings.Split(ansi.Wrap(what, w-lw, ""), "\n")
+	if len(lines) > n {
+		lines = append(lines[:n-1:n-1], ansi.Truncate(lines[n-1], w-lw-1, "")+pDim("…"))
+	}
+	pad := strings.Repeat(" ", lw)
+	for i := range lines {
+		if i == 0 {
+			lines[i] = lead + lines[i]
+		} else {
+			lines[i] = pad + lines[i]
+		}
+	}
+	return lines
+}
+
+// eventParts is an event's time and who, and what happened.
+func (m *model) eventParts(l *Live, e event.Event) (lead, what string) {
 	who := pDim(fit("ackn4th", 14))
 	if e.Agent > 0 && e.Agent <= len(l.Task.Agents) {
 		spec := l.Task.Agents[e.Agent-1]
 		who = fgp(providerColor(spec.Provider))(fit(spec.Role, 14))
 	}
-	var what string
 	switch e.Kind {
 	case event.TaskStarted:
 		what = pGreen("■ task " + e.Text)
@@ -631,6 +693,8 @@ func (m *model) eventLine(l *Live, e event.Event) string {
 		what = pRed("│  ✗ " + e.Text)
 	case event.Message:
 		what = pLime("✉ ") + pText(oneLine(e.Text))
+	case event.Reasoning:
+		what = fgp(violet)("∴ ") + pDim(oneLine(e.Text))
 	case event.DoneVote:
 		what = bold(pLime("◆ declared done ")) + pDim(oneLine(e.Text))
 	case event.TurnEnded:
@@ -651,7 +715,7 @@ func (m *model) eventLine(l *Live, e event.Event) string {
 	default:
 		what = pDim(string(e.Kind) + " " + e.Text)
 	}
-	return pFaint(e.Time.Local().Format("15:04:05")) + " " + pDim(fmt.Sprintf("r%-2d", e.Round)) + " " + who + " " + what
+	return pFaint(e.Time.Local().Format("15:04:05")) + " " + pDim(fmt.Sprintf("r%-2d", e.Round)) + " " + who + " ", what
 }
 
 // filterBar shows which agent the log is filtered to.
@@ -674,19 +738,58 @@ func (m *model) filterBar(l *Live) string {
 	} else {
 		b.WriteString("  " + pDim("○ paused · f"))
 	}
+	if m.focusMain && m.view == vActivity {
+		b.WriteString(pDim("  ⏎ details · c copies"))
+	}
 	return b.String()
 }
 
 func (m *model) activity(l *Live, w, h int) []string {
 	evs := filterEvents(l, m.agent)
-	lines := make([]string, len(evs))
-	for i, e := range evs {
-		lines[i] = m.eventLine(l, e)
+	if len(evs) == 0 {
+		return []string{m.filterBar(l), "", pDim("no activity yet")}
 	}
-	if len(lines) == 0 {
-		lines = []string{pDim("no activity yet")}
+	// Each event wraps onto up to three lines; enter shows the rest.
+	rows, sel := max(1, h-2), m.selected(len(evs))
+	memo := map[int][]string{}
+	lines := func(i int) []string {
+		if ls, ok := memo[i]; ok {
+			return ls
+		}
+		ls := m.eventLines(l, evs[i], w-1, 3)
+		memo[i] = ls
+		return ls
 	}
-	return append([]string{m.filterBar(l), ""}, m.scrolled(lines, h-2)...)
+	// m.scroll is the first event shown. Keep the cursor's event whole on
+	// screen, and the screen full when the log's end is in view.
+	sum := func(from, to int) int { // lines of events from..to
+		n := 0
+		for i := from; i <= to && n <= rows; i++ {
+			n += len(lines(i))
+		}
+		return n
+	}
+	// Events more than a screen above the cursor can't show: start there.
+	m.scroll = min(max(m.scroll, sel-rows), sel)
+	for m.scroll < sel && sum(m.scroll, sel) > rows {
+		m.scroll++
+	}
+	for m.scroll > 0 && sum(m.scroll-1, len(evs)-1) <= rows {
+		m.scroll--
+	}
+	var out []string
+	for i := m.scroll; i < len(evs) && len(out) < rows; i++ {
+		for _, line := range lines(i) {
+			if i == sel && m.focusMain {
+				line = fill(line, w-1, bg3)
+			}
+			out = append(out, line)
+		}
+	}
+	if len(out) > rows {
+		out = out[:rows]
+	}
+	return append([]string{m.filterBar(l), ""}, out...)
 }
 
 func (m *model) messages(l *Live, w, h int) []string {
@@ -965,27 +1068,27 @@ func (m *model) drawConfirm(lines []string) string {
 
 // helpRows are the dashboard's keys, as the help panel lists them.
 var helpRows = [][2]string{
-	{"↑ ↓  j k", "select task · select agent (overview) · scroll"},
+	{"↑ ↓  j k", "select a task, an agent or the summary · scroll"},
 	{"tab", "switch between the task list and the task panel"},
-	{"← →  h l", "select agent; in activity and messages, filter"},
-	{"⏎ enter", "open the task · zoom into the selected agent"},
+	{"← →  h l", "select an agent; in activity and messages, filter"},
+	{"⏎ enter", "open · zoom into an agent · an activity line's details"},
 	{"esc", "back"},
 	{"1 2 3 4", "overview · activity log · files · handoffs"},
 	{"[  ]", "previous / next task from anywhere"},
 	{"pgup pgdn g G", "page · top · bottom (and follow)"},
 	{"f", "follow new activity on / off"},
-	{"s", "stop the task (it saves state; resume any time)"},
-	{"r", "resume a stopped task in the background"},
-	{"x", "delete a task's records (its workspace files stay)"},
+	{"s  r  x", "stop · resume · delete a task (each asks first)"},
 	{"n", "new task: agents, models, efforts and a prompt"},
-	{"p", "providers: see which are ready, sign in or out"},
-	{"R", "roles: add, edit, import or remove agent roles"},
-	{"t", "tour: the walkthrough's tooltips again, from the start"},
+	{"p  R", "providers (sign in or out) · roles (add, edit, import)"},
+	{"e", "the task in full: prompt, why it stopped, to-dos"},
+	{"c", "copy what's selected, in full"},
+	{"drag", "select text to copy it · right-click copies a line"},
+	{"t", "the walkthrough's tips again"},
 	{"q", "quit · tasks keep running"},
 }
 
-// helpBox lists every key, at most w cells wide.
-func helpBox(w int, voice bool) string {
+// helpBox lists every key, at most w cells wide and, short of spacing, h tall.
+func helpBox(w, h int, voice bool) string {
 	rows := helpRows
 	if voice {
 		n := len(rows) - 1 // before q
@@ -995,7 +1098,10 @@ func helpBox(w int, voice bool) string {
 	for _, r := range rows {
 		lines = append(lines, " "+pill(fit(r[0], 14), bg3, lime)+"  "+pText(r[1]))
 	}
-	lines = append(lines, "", pDim(" Closing the dashboard never stops a task."), pDim(" Every command: ")+pLime("ackn4th --help"), pFaint(" press any key"))
+	lines = append(lines, "", pDim(" Every command: ")+pLime("ackn4th --help")+pFaint("   ·   press any key"))
+	if len(lines)+2 > h {
+		lines = append(lines[1:len(lines)-2], lines[len(lines)-1]) // no spacing
+	}
 	return panel("KEYS", "", lines, min(80, w-4), len(lines)+2, true, bg2)
 }
 
