@@ -106,13 +106,14 @@ address after them), in handoffs, details and the activity log.
 | `f` | follow new activity on / off |
 | `s` | stop the task (it saves state; resume any time) |
 | `r` | resume a stopped task in the background |
-| `a` | follow-up: give a task that isn't running more work (the same agents continue; all must declare done again) |
+| `a` | follow-up: give a task that isn't running more work, and optionally other roles, models or efforts for its agents (the same agents continue; all must declare done again) |
 | `x` | delete a task's records (its workspace files stay) |
 | `n` | new task |
 | `p` | providers: see which are ready, sign in or out |
 | `R` | roles: add, edit, import or remove agent roles |
 | `t` | the walkthrough again, from the start |
 | `v` `V` | the voice on / off · repeat the last phrase |
+| `w` `i` `o` | with the voice on: where you are · more about what's selected · what you can do (`F2` `F3` `F4`, or `alt+` them, in forms and dialogs) |
 | `?` | every key |
 | `q` | quit; tasks keep running |
 
@@ -142,8 +143,8 @@ opens the new-task form, no flags needed:
   pull request when the task completes.
 - **Agents**, as many as you like: each row has dropdowns for the role,
   provider, model and effort. Pick several roles for one agent with space,
-  or choose “type a model id…” for any model. `ctrl+n` adds a row, and `del`
-  (or the row's ✕) removes one. The form shows whether the team shares one
+  or choose “type a model id…” for any model. `ctrl+n` adds a row, and `x` or
+  `del` on any of a row's fields (or the row's ✕) removes it. The form shows whether the team shares one
   cached context.
 
 A line under the agents explains whichever field is focused, and `f1` (or
@@ -171,19 +172,35 @@ up in the new-task form at once. See [roles](../../roles/README.md).
 
 ## The voice
 
-With the voice on (`v`, or `ackn4th voice on`), the dashboard says where you
-are after each key: the screen, what is selected, a form field and its
-value, a dialog and which button is selected, the list of keys. A task is
-summarized, in the task list and when you reach it or another of its tabs:
-its round, how many agents are working or say it's done, the to-dos open
-for you, why it stopped or failed, and its prompt. Moving within a tab says
-only what is selected: an agent and what it is doing, an event, the
-latest handoff, the files changed. A tooltip on screen is read after all
-that.
-Between keys it says what changed: a task finished or failed, a message
-flashed. It doesn't echo typing: a text field is read when you reach it.
-A newer phrase cuts off an older one, and holding an arrow key speaks only
-where you stop. `V` repeats the last phrase. How it works:
+With the voice on (`v`, or `ackn4th voice on`), the dashboard says little
+on its own. After each key it names what you landed on, briefly: a task
+and its status, a tab, an agent and what it is doing, an event, a form
+field and its value, a dialog's question and selected button. Between
+keys it says what changed: a task finished or failed, a message flashed.
+It doesn't echo typing: a text field is read when you reach it.
+
+It says things in words rather than reading the screen: an activity line
+like `12:07:05 r4 software_arch… ╰─ turn ended · 2.1k in / 812 out`
+becomes "at twelve oh seven PM, in round 4, software architect's turn
+ended. It read about 2100 tokens of input… and wrote 812 tokens": the
+time as people say it, the whole role, numbers with their units.
+
+The rest is on request:
+
+| Key | Says |
+| --- | --- |
+| `w` | where you are: the screen, the task and tab, what is selected |
+| `i` | everything about what's selected, more than the screen shows: a task's round, agents, to-dos open for you, why it stopped, uncommitted changes and prompt; an agent's work and latest handoff; an event in full, how long ago, and the agent's provider and model; the handoffs; the files changed; a tip on screen |
+| `o` | what you can do there, for that task's status (`s` only while running, `r` only when it can resume) |
+| `?` | every key (the help panel, read aloud) |
+| `V` | the last phrase again |
+
+Plain `w`, `i` and `o` work on the dashboard and in the panels over it.
+In the new-task and follow-up forms and dialogs, where letters are
+typed or mean something else, use `alt+w`, `alt+i`, `alt+o`, or `F2`,
+`F3`, `F4`; those work everywhere. Turning the voice on says all this
+first. A newer phrase cuts off an older one, and holding an arrow key
+speaks only where you stop. How it works:
 [internal/voice](../voice/README.md).
 
 ## Code
@@ -199,5 +216,7 @@ form.go     the new-task form
 setup.go    provider setup and sign-out
 roles.go    the roles screen and role editor
 tour.go     the walkthrough's tooltips
-speak.go    what the voice says
+speak.go    what the voice says on its own
+voicekeys.go what it says when asked (w, i, o)
+spokenevent.go an activity event in words
 ```

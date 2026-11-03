@@ -407,19 +407,30 @@ func (m *model) whereDetail() string {
 	if m.open.at >= len(l.Events) {
 		return ""
 	}
-	title, body := m.detailBody(l, m.open.at, 200)
+	title, _ := m.detailBody(l, m.open.at, 200)
+	return "Details: " + strings.ToLower(title) + ", " + m.spokenEvent(l, l.Events[m.open.at], true) + " " +
+		m.detailSpoken(l, m.open.at, 6) + " Up and down scroll, left and right move between events, escape closes."
+}
+
+// detailSpoken is the details panel's text for the voice, at most n
+// lines of it (n < 0: all). A turn's token line, which spokenEvent
+// already says in words, is left out.
+func (m *model) detailSpoken(l *Live, at, n int) string {
+	if l.Events[at].Kind == event.TurnEnded {
+		return ""
+	}
+	_, body := m.detailBody(l, at, 200)
 	var b strings.Builder
-	b.WriteString("Details: " + strings.ToLower(title) + ". ")
 	for i, line := range body {
-		if i == 6 {
+		if i == n {
 			b.WriteString("… ")
 			break
 		}
 		if t := strings.TrimSpace(ansi.Strip(line)); t != "" {
-			b.WriteString(t + ". ")
+			b.WriteString(strings.TrimSuffix(t, ".") + ". ")
 		}
 	}
-	return b.String() + "Up and down scroll, left and right move between events, escape closes."
+	return strings.TrimSpace(b.String())
 }
 
 // tildePath shortens a path in the home directory to ~/….

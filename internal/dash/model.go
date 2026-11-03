@@ -33,9 +33,10 @@ type Options struct {
 	// Delete removes a task's records; nil disables it.
 	Delete func(*task.Task) error
 	// FollowUp gives a task that isn't running a new prompt and starts it
-	// again in the background; nil disables it. It may return
-	// *LoginRequired.
-	FollowUp func(t *task.Task, prompt string) error
+	// again in the background; nil disables it. team, unless nil, is each
+	// agent's role, model and effort from now on (providers unchanged). It
+	// may return *LoginRequired.
+	FollowUp func(t *task.Task, prompt string, team []NewAgent) error
 
 	// Launch starts a task from the new-task form in the background and
 	// returns its ID; nil hides the form. It may return *LoginRequired.
@@ -149,7 +150,7 @@ type model struct {
 
 	speaker   Speaker                 // the voice, while on
 	entered   bool                    // while speaking: a task or tab was just reached
-	more      *followUpBox            // the follow-up dialog, while open
+	answered  bool                    // a voice key was answered: speak says nothing more
 	changes   map[string]*changeState // what git says of stopped tasks' workspaces
 	voiceBusy bool                    // the voice is starting
 	closed    bool                    // the dashboard has quit
@@ -286,15 +287,19 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.copyDrag()
 			}
 		}
+		// The voice's keys answer anywhere and change nothing, not even
+		// a tip or the help panel.
+		if m.voiceKey(msg.String()) {
+			return m, nil
+		}
 		if _, typing := m.roles.typingRole(); typing {
 			return m, m.rolesKey(msg.String())
 		}
-		if m.more != nil {
-			return m.moreKey(msg.String())
-		}
 		if k := msg.String(); m.form == nil && m.confirm == "" && (k == "v" || k == "V") {
 			if k == "V" {
-				m.speaker.Repeat()
+				if m.speaker != nil {
+					m.speaker.Repeat()
+				}
 				return m, nil
 			}
 			m.help = false
@@ -318,13 +323,14 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.key(msg.String())
 	case tea.PasteMsg:
-		if m.more != nil {
-			m.more.in.insert(msg.Content)
-		} else if m.roles != nil {
+		if m.roles != nil {
 			m.rolePaste(msg.Content)
 		} else if m.form != nil {
 			m.form.paste(msg.Content)
 		}
+	case followUpMsg:
+		m.form = nil
+		return m, m.resume(msg.r)
 	case launchedMsg:
 		if m.form != nil && m.form.launched(msg) {
 			m.form = nil
@@ -632,7 +638,8 @@ func (m *model) act(what string) tea.Cmd {
 type resumeReq struct {
 	task     *task.Task
 	provider string
-	followUp string // a follow-up's prompt, to start with that instead
+	followUp string     // a follow-up's prompt, to start with that instead
+	team     []NewAgent // with a follow-up: every agent's new settings; nil keeps them
 }
 
 // resume starts r's task again. When a provider needs a sign-in first,
@@ -640,7 +647,7 @@ type resumeReq struct {
 func (m *model) resume(r *resumeReq) tea.Cmd {
 	var err error
 	if r.followUp != "" {
-		err = m.opt.FollowUp(r.task, r.followUp)
+		err = m.opt.FollowUp(r.task, r.followUp, r.team)
 	} else {
 		err = m.opt.Resume(r.task, r.provider)
 	}
@@ -732,8 +739,6 @@ func (m *model) draw() string {
 		screen = m.drawSetup(lines)
 	case m.form != nil:
 		screen = m.drawForm(lines)
-	case m.more != nil:
-		screen = m.drawMore(lines)
 	case m.confirm != "" && m.current() != nil:
 		screen = m.drawConfirm(lines)
 	case m.open != nil:

@@ -175,7 +175,7 @@ func (m *model) box(x, y int) (left, right int) {
 	case m.form != nil:
 		fw := min(112, m.w-4)
 		return m.form.x + 1, m.form.x + fw + 1
-	case m.setup != nil || m.roles != nil || m.confirm != "" || m.more != nil:
+	case m.setup != nil || m.roles != nil || m.confirm != "":
 		return 0, m.w
 	}
 	leftW := min(36, max(28, m.w/4))

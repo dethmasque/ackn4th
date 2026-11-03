@@ -30,12 +30,12 @@ func TestFormSaysWhereTheRepoGoes(t *testing.T) {
 		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		m.Update(keyMsg("n"))
 		m.form.repo = newInput("acme/web")
-		checkScreen(t, m, size, "clones to")
+		checkScreen(t, m, size, "not used; clones to")
 		if !strings.Contains(ansi.Strip(m.render()), "ackn4th-workspaces/web") {
 			t.Errorf("%v: the clone's path isn't shown", size)
 		}
 		m.form.repo = newInput("acme/api")
-		checkScreen(t, m, size, "reuses")
+		checkScreen(t, m, size, "not used; reuses")
 		m.form.repo = newInput("not a repo")
 		checkScreen(t, m, size, "owner/name")
 	}
@@ -70,5 +70,22 @@ func TestUncommittedChangesNote(t *testing.T) {
 	m.focusMain = false
 	if !strings.Contains(m.where(), "15 files changed and not committed") {
 		t.Errorf("the voice doesn't say it: %q", m.where())
+	}
+}
+
+// Typing a repo hides the trust checkbox, which mustn't move focus off
+// the repo field.
+func TestTypingARepoKeepsFocus(t *testing.T) {
+	var launched []NewTask
+	opt := formOptions(task.NewStore(t.TempDir()), &launched)
+	opt.Trusted = func(string) bool { return false }
+	m := newModel(opt)
+	m.Update(keyMsg("n"))
+	m.form.focusOn(field{kind: "repo"})
+	for _, k := range "acme/web" {
+		m.Update(keyMsg(string(k)))
+	}
+	if got := m.form.repo.String(); got != "acme/web" || m.form.current().kind != "repo" {
+		t.Errorf("repo %q, branch %q, focus %v", got, m.form.branch.String(), m.form.current())
 	}
 }

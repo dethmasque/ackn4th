@@ -22,7 +22,7 @@ var tour = []tourStep{
 // tip is the walkthrough step for what's on screen, if any.
 func (m *model) tip() (tourStep, int, bool) {
 	t := m.opt.Tips
-	if !t.Enabled() || m.setup != nil || m.roles != nil || m.confirm != "" || m.more != nil || m.help || m.failed != "" || m.w < 80 || m.h < 22 {
+	if !t.Enabled() || m.setup != nil || m.roles != nil || m.confirm != "" || m.help || m.failed != "" || m.w < 80 || m.h < 22 {
 		return tourStep{}, 0, false
 	}
 	id := "dash.tasks"

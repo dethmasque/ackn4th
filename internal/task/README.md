@@ -50,11 +50,25 @@ ackn4th start-task --parallel --roles backend_dev,frontend_dev,qa_engineer \
   it, and the next round's digest shows each agent its teammates' diffs.
 - **Consensus** means every agent declares done in the same round. A task
   stopped mid-round resumes only the agents that hadn't finished it.
+- **Going in circles.** Within a turn, a repeat of a lookup the agent
+  already made (`list_dir`, `read_file`, `search_files`, `run_command`
+  with the same input), with no file changed by it since, isn't run: the
+  agent is told the answer is already in its conversation. After three
+  such repeats it is asked to hand off. Across turns, a task stops (to
+  save cost) when an agent gives the same handoff three turns running, or
+  runs out of tool calls two turns running without changing a file. The
+  reason names the agent and suggests resuming it on another model or
+  provider, or a follow-up; resuming gives it a fresh start. Done votes
+  don't count: an agent waiting on teammates may say so every turn.
 - **Follow-ups** (`follow-up`, or `a` in the dashboard) give a task that
   isn't running more work. Every agent gets the follow-up once, at the
   start of its next turn, whether the team takes turns or works at once,
   and every agent's done vote is cleared. The follow-up gets as many
   rounds as the task's last run allowed, unless `--rounds` says otherwise.
+  In the dashboard, a follow-up can also give agents other roles, models
+  or efforts (not other providers). A new role or effort keeps the agent's
+  conversation; a new model starts it fresh, with the workspace, notes and
+  history carried over. The follow-up tells every agent what changed.
 
 Lines from agents working at once are tagged with the agent:
 

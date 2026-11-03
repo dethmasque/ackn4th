@@ -509,6 +509,7 @@ func TestFollowUp(t *testing.T) {
 		if err := got.AddFollowUp("Also add tests for main.go", -1, time.Now()); err != nil {
 			t.Fatal(err)
 		}
+		got.FollowUps[0].Changes = []string{"agent 2 uses max effort (was default)"}
 		if got.Status != Stopped || got.Agents[0].Done || got.MaxRounds != got.Round-1+3 {
 			t.Errorf("%q: after the follow-up: status=%s done=%v round=%d max=%d", mode, got.Status, got.Agents[0].Done, got.Round, got.MaxRounds)
 		}
@@ -521,7 +522,8 @@ func TestFollowUp(t *testing.T) {
 			if len(in) != 4 {
 				t.Fatalf("%q %s: %d inputs", mode, name, len(in))
 			}
-			if strings.Contains(in[0], "Follow-up") || !strings.Contains(in[2], "# Follow-up from the person who gave the task") || !strings.Contains(in[2], "Also add tests for main.go") {
+			if strings.Contains(in[0], "Follow-up") || !strings.Contains(in[2], "# Follow-up from the person who gave the task") || !strings.Contains(in[2], "Also add tests for main.go") ||
+				!strings.Contains(in[2], "The team changed for this follow-up (the roles above are current):\n\n- agent 2 uses max effort (was default)") {
 				t.Errorf("%q %s: follow-up not delivered once, at its next turn:\n%s", mode, name, in[2])
 			}
 		}

@@ -152,8 +152,6 @@ func (m *model) footer() string {
 	}
 	keys := [][2]string{{"↑↓", "move"}, {"tab", "panel"}, {"←→", "agent"}, {"⏎", "zoom"}, {"e", "expand"}, {"c", "copy"}, {"1-4", "tabs"}, {"[ ]", "task"}, {"f", "follow"}, {"s", "stop"}, {"r", "resume"}, {"a", "follow-up"}, {"x", "delete"}, {"n", "new"}, {"p", "providers"}, {"R", "roles"}, {"t", "tour"}, {"?", "help"}, {"q", "quit"}}
 	switch {
-	case m.more != nil:
-		keys = [][2]string{{"⏎", "run it"}, {"shift ⏎", "new line"}, {"esc", "cancel"}}
 	case m.open != nil && m.open.task:
 		keys = [][2]string{{"↑↓", "scroll"}, {"c", "copy it all"}, {"esc", "close"}}
 	case m.open != nil:
@@ -595,12 +593,18 @@ func (m *model) card(l *Live, i, cw int) string {
 		if s := a.LiveSummary(); s != "" {
 			activity = fgp(pc)(s)
 		}
+	case l.Task.Parallel() && l.Task.Status == task.Running && spec.RoundDone >= l.Task.Round:
+		// In parallel, everyone finishes the round, then waits for the
+		// rest: that is what this agent is doing, whether or not it also
+		// voted the whole task done.
+		phase, activity = pill("✓ ROUND DONE", bg3, lime), pDim("waiting for teammates")
+		if a.Voted {
+			activity = pLime("◆ voted the task done") + pDim(" · waiting for teammates")
+		}
 	case a.Voted:
-		phase, activity = pill("◆ DONE", lime, bg0), pDim("declared the task done")
+		phase, activity = pill("◆ VOTED DONE", lime, bg0), pDim("says the whole task is done")
 	case i == l.Next():
 		phase, activity = pill("▸ UP NEXT", amber, bg0), pDim("waiting for the handoff")
-	case l.Task.Parallel() && l.Task.Status == task.Running && spec.RoundDone >= l.Task.Round:
-		phase, activity = pill("✓ ROUND DONE", bg3, lime), pDim("waiting for teammates")
 	default:
 		phase, activity = pill("○ IDLE", bg3, dim), pDim(fmt.Sprintf("%d turns so far", spec.Turns))
 	}
@@ -911,7 +915,7 @@ func (m *model) agentDetail(l *Live, w int) []string {
 	if a.Phase != Idle {
 		now = pill(m.spin(spinner)+" "+strings.ToUpper(a.Phase.String()), green, bg0) + pDim(" for "+short(time.Since(a.Since))+" · ") + pText(a.Activity)
 	} else if a.Voted {
-		now = pill("◆ DONE", lime, bg0)
+		now = pill("◆ VOTED DONE", lime, bg0) + pDim(" says the whole task is done")
 	}
 	out = append(out, kv("now", now))
 	u := spec.Usage
@@ -1109,7 +1113,9 @@ func helpBox(w, h int, voice bool) string {
 	rows := helpRows
 	if voice {
 		n := len(rows) - 1 // before q
-		rows = append(append(rows[:n:n], [2]string{"v  V", "voice: read the dashboard aloud on / off · repeat"}), rows[n])
+		rows = append(append(rows[:n:n],
+			[2]string{"v  V", "voice: read the dashboard aloud on / off · repeat"},
+			[2]string{"w  i  o", "voice: where you are · the selection · what to do · or F2 F3 F4"}), rows[n])
 	}
 	lines := []string{""}
 	for _, r := range rows {

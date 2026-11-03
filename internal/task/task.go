@@ -73,6 +73,12 @@ type AgentSpec struct {
 	// FollowUpsSeen is how many of the task's follow-ups the agent has
 	// been given.
 	FollowUpsSeen int `json:"follow_ups_seen,omitempty"`
+	// SameHandoffs counts consecutive turns whose handoff repeated the
+	// one before, and Idle consecutive turns wound up for the agent (out
+	// of tool calls, or repeating itself) without it changing a file: an
+	// agent going in circles. See stuck.
+	SameHandoffs int `json:"same_handoffs,omitempty"`
+	Idle         int `json:"idle,omitempty"`
 }
 
 // Task is the persisted record of one task.

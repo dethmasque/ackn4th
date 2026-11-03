@@ -18,6 +18,7 @@ import (
 	"github.com/dethmasque/ackn4th/internal/auth"
 	"github.com/dethmasque/ackn4th/internal/config"
 	"github.com/dethmasque/ackn4th/internal/dash"
+	"github.com/dethmasque/ackn4th/internal/event"
 	"github.com/dethmasque/ackn4th/internal/github"
 	"github.com/dethmasque/ackn4th/internal/provider/claudecode"
 	"github.com/dethmasque/ackn4th/internal/role"
@@ -522,7 +523,7 @@ func tildeHome(dir string) string {
 // checks what resume-task would, without asking anything.
 // followUpBackground gives tk a follow-up and starts it in the
 // background, for the dashboard.
-func (a *app) followUpBackground(tk *task.Task, prompt string) error {
+func (a *app) followUpBackground(tk *task.Task, prompt string, team []dash.NewAgent) error {
 	tk, err := a.store.Load(tk.ID) // the dashboard's copy is for showing
 	if err != nil {
 		return err
@@ -536,11 +537,76 @@ func (a *app) followUpBackground(tk *task.Task, prompt string) error {
 	if err := tk.AddFollowUp(prompt, -1, time.Now()); err != nil {
 		return err
 	}
+	if err := a.changeTeam(tk, team); err != nil {
+		return err
+	}
 	if err := a.store.Save(tk); err != nil {
 		return err
 	}
 	_, err = a.store.Spawn(tk.ID)
 	return err
+}
+
+// changeTeam gives tk's agents the roles, models and efforts in team (one
+// entry per agent, providers unchanged), and records what changed on the
+// latest follow-up so every agent is told. A new role or effort keeps the
+// agent's conversation; a new model starts it fresh (a conversation can't
+// always move between models), with the workspace, notes and the task's
+// history carried over.
+func (a *app) changeTeam(tk *task.Task, team []dash.NewAgent) error {
+	if team == nil {
+		return nil
+	}
+	if len(team) != len(tk.Agents) {
+		return fmt.Errorf("task %s has %d agents, not %d", tk.Label(), len(tk.Agents), len(team))
+	}
+	reg, err := a.roles()
+	if err != nil {
+		return err
+	}
+	effort := func(e string) string {
+		if e == "" {
+			return "default"
+		}
+		return e
+	}
+	var changes []string
+	for i, n := range team {
+		old := tk.Agents[i]
+		if n.Provider != "" && n.Provider != old.Provider {
+			return fmt.Errorf("agent %d: a follow-up keeps each agent's provider (%s); resume-task --provider moves agents", i+1, old.Provider)
+		}
+		for _, r := range strings.Split(n.Role, "+") {
+			if _, err := reg.Get(r); err != nil {
+				return fmt.Errorf("agent %d: %w", i+1, err)
+			}
+		}
+		var what []string
+		if n.Role != old.Role {
+			what = append(what, fmt.Sprintf("is now %s (was %s)", n.Role, old.Role))
+		}
+		if n.Model != old.Model {
+			what = append(what, fmt.Sprintf("runs on model %s (was %s), starting a fresh conversation", n.Model, old.Model))
+			if err := a.store.Switch(tk, i, old.Provider, n.Model, n.Effort); err != nil {
+				return err
+			}
+		}
+		if n.Effort != old.Effort {
+			what = append(what, fmt.Sprintf("uses %s effort (was %s)", effort(n.Effort), effort(old.Effort)))
+		}
+		if len(what) == 0 {
+			continue
+		}
+		tk.Agents[i].Role, tk.Agents[i].Effort = n.Role, n.Effort
+		changes = append(changes, fmt.Sprintf("agent %d %s", i+1, strings.Join(what, ", ")))
+	}
+	if len(changes) == 0 {
+		return nil
+	}
+	f := &tk.FollowUps[len(tk.FollowUps)-1]
+	f.Changes = changes
+	a.store.AppendEvent(tk.ID, event.Event{Kind: event.Notice, Time: time.Now(), Round: tk.Round, Text: "team changed: " + strings.Join(changes, "; ")})
+	return nil
 }
 
 func (a *app) resumeBackground(tk *task.Task, prov string) error {

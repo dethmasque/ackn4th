@@ -17,7 +17,10 @@ ackn4th voice uninstall             # delete the download
 ```
 
 In the dashboard, `v` turns it on or off (the welcome dialog offers it on
-first run) and `V` repeats the last phrase. The setting is saved as
+first run) and `V` repeats the last phrase. It names what you move to;
+`w`, `i` and `o` ask where you are, more about the selection, and what
+you can do, and `?` lists every key
+([the dashboard's voice](../dash/README.md#the-voice)). The setting is saved as
 `voice:` in the [config](../config/README.md). To have the dashboard speak
 from its very first screen without changing the setting, open it with
 `ackn4th --voice` (also `ackn4th dash --voice` and `ackn4th tour --voice`).
@@ -73,8 +76,9 @@ the text itself (`phonemes.go`): words from the lexicon (plus a few
 software words it lacks, like "dev"), regular -s, -ed and -ing forms
 derived from it, compounds of two of its words ("backend" is back + end),
 anything else spelled out. `text.go` first rewrites what a lexicon can't
-say: numbers, task IDs, acronyms, symbols, and names like `TECH_LEAD`,
-which are words, not an acronym.
+say: numbers, clock times ("12:07:05" is "twelve oh seven"), task IDs,
+acronyms, symbols, and names like `TECH_LEAD`, which are words, not an
+acronym. ackn4th itself is "ack-'n-forth", like back-and-forth.
 
 A phrase is spoken a sentence at a time: the first sentence plays as soon
 as it is synthesized, and the next ones are synthesized while it plays, so

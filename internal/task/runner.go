@@ -76,6 +76,10 @@ func (r *Runner) Run(ctx context.Context, id string, background bool) (*Task, er
 	}
 	resumed := t.Status != Pending
 	t.Status, t.Reason, t.PID, t.Background = Running, "", os.Getpid(), background
+	// Someone started it again: a stuck agent gets a fresh chance.
+	for i := range t.Agents {
+		t.Agents[i].SameHandoffs, t.Agents[i].Idle = 0, 0
+	}
 	if err := r.Store.Save(t); err != nil {
 		return t, err
 	}
@@ -108,6 +112,10 @@ func (r *Runner) Run(ctx context.Context, id string, background bool) (*Task, er
 	case errors.As(runErr, new(unauthorized)):
 		t.Status = Stopped
 		t.Reason = runErr.Error() + "; once signed in again, resume the task"
+		r.emit(t, event.Event{Kind: event.TaskStopped, Text: t.Reason})
+	case errors.As(runErr, new(*StuckError)):
+		t.Status = Stopped
+		t.Reason = runErr.Error()
 		r.emit(t, event.Event{Kind: event.TaskStopped, Text: t.Reason})
 	case errors.Is(runErr, ErrRoundLimit):
 		t.Status = Stopped

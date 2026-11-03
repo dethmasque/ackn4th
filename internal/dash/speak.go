@@ -13,9 +13,9 @@ import (
 )
 
 // The dashboard can read itself aloud (an accessibility option): after
-// each key it says where you are and what is selected, and between keys
-// what changed (a task finished, a message flashed). v turns it on or
-// off; V repeats the last phrase.
+// each key it names what you landed on, briefly, and between keys what
+// changed (a task finished, a message flashed). More is on request: see
+// voicekeys.go. v turns it on or off; V repeats the last phrase.
 
 // Speaker speaks phrases; a newer phrase cuts off an older one.
 type Speaker interface {
@@ -92,7 +92,7 @@ func (m *model) voiceStarted(msg voiceMsg) {
 	if v := m.opt.Voice; v.Save != nil {
 		v.Save(true)
 	}
-	m.say("voice on · v turns it off, shift v repeats")
+	m.say("voice on · w where you are, i about the selection, o what you can do, ? every key")
 }
 
 // spoken is what speak compares against: the state before a message.
@@ -107,9 +107,6 @@ type spoken struct {
 func (m *model) focusedField() string {
 	if f, ok := m.roles.typingRole(); ok {
 		return f
-	}
-	if m.more != nil {
-		return "follow-up"
 	}
 	if m.form == nil || m.form.drop != nil {
 		return ""
@@ -147,7 +144,8 @@ func (m *model) speak(msg tea.Msg, before spoken) {
 	newFail := m.failed != "" && m.failed != before.failed
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
-		if msg.String() == "V" {
+		if msg.String() == "V" || m.answered {
+			m.answered = false
 			return
 		}
 		// Typing isn't echoed: a field is said once, when it is reached.
@@ -177,13 +175,13 @@ func (m *model) speak(msg tea.Msg, before spoken) {
 	defer func() { m.entered = false }()
 	switch {
 	case isVoice(msg):
-		m.speaker.Say(m.flash + ". " + m.where())
+		m.speaker.Say(voiceIntro + " " + m.brief())
 	case newFail:
 		m.speaker.Say("Error: " + m.failed)
 	case newFlash:
 		m.speaker.Say(m.flash)
 	default:
-		m.speaker.Say(m.where())
+		m.speaker.Say(m.brief())
 	}
 }
 
@@ -220,29 +218,15 @@ func (m *model) where() string {
 		return m.whereRoles()
 	case m.setup != nil:
 		return m.whereSetup()
-	case m.more != nil:
-		return m.whereMore()
 	case m.confirm != "":
-		l := m.current()
-		if l == nil {
-			return ""
-		}
-		q := fmt.Sprintf("%s task %s?", strings.ToUpper(m.confirm[:1])+m.confirm[1:], l.Task.Title())
-		if m.confirm == "resume" {
-			on := "each agent's own provider"
-			if m.runOn != "" {
-				on = m.runOn
-			}
-			q += " It runs on " + on + "; up and down change that."
-		}
-		return q + " " + yesNo(m.no, "Yes", "No") + ". Left and right choose, enter confirms."
+		return m.confirmQuestion() + " " + m.options()
 	case m.help:
 		var b strings.Builder
 		b.WriteString("Keys. ")
 		for _, r := range helpRows {
 			b.WriteString(keyWords(r[0]) + ": " + r[1] + ". ")
 		}
-		b.WriteString("v: voice on or off. Shift v: repeat. Press any key to close.")
+		b.WriteString("v: voice on or off. Shift v: repeat. w: where you are. i: more about what's selected. o: what you can do. In forms and dialogs, alt w, alt i and alt o, or F2, F3 and F4. Any other key closes this.")
 		return b.String()
 	case m.form != nil:
 		return m.form.where()
@@ -290,7 +274,7 @@ func (m *model) whereMain() string {
 	case vActivity:
 		if evs := filterEvents(l, m.agent); len(evs) > 0 {
 			i := m.selected(len(evs))
-			s += fmt.Sprintf(" Event %d of %d: %s. Enter shows its details.", i+1, len(evs), strings.TrimSpace(ansi.Strip(m.eventLine(l, evs[i]))))
+			s += fmt.Sprintf(" Event %d of %d, %s Enter shows its details.", i+1, len(evs), m.spokenEvent(l, evs[i], false))
 		} else {
 			s += " No events yet."
 		}
@@ -510,7 +494,11 @@ func (f *form) where() string {
 	}
 	switch cur.kind {
 	case "prompt":
-		return "New task. Prompt, text field: " + value(&f.prompt, "empty") + ". Tab moves on; control s launches."
+		if f.team != nil {
+			return "Follow-up for task " + f.team.Title() + ". What should the agents do next? Text field: " + value(&f.prompt, "empty") +
+				". Below it, each agent's role, model and effort, which you can change. The same agents continue; a new model starts that agent's conversation fresh."
+		}
+		return "New task. Prompt, text field: " + value(&f.prompt, "empty") + "."
 	case "name":
 		if v := strings.TrimSpace(f.name.String()); v != "" {
 			return "Task name, text field: " + v
@@ -529,32 +517,32 @@ func (f *form) where() string {
 		return "Branch, optional, created if it doesn't exist: " + value(&f.branch, "empty")
 	case "mode":
 		if f.parallel {
-			return "Mode: parallel. Space switches to turns."
+			return "Mode: parallel."
 		}
-		return "Mode: turns. Space switches to parallel."
+		return "Mode: turns."
 	case "rounds":
 		return "Rounds: " + value(&f.rounds, "until done")
 	case "pr":
 		return "Open a draft pull request at the end, checkbox, " + check(f.draftPR)
 	case "role":
 		a, n := agent()
-		return n + ", role: " + a.role + ". Enter opens the list."
+		return n + ", role: " + a.role + "."
 	case "provider":
 		a, n := agent()
-		return n + ", provider: " + a.provider + ". Enter opens the list."
+		return n + ", provider: " + a.provider + "."
 	case "model":
 		a, n := agent()
 		if a.editModel != nil {
 			return n + ", model, text field: " + value(a.editModel, "empty")
 		}
-		return n + ", model: " + a.model + ". Enter opens the list."
+		return n + ", model: " + a.model + "."
 	case "effort":
 		a, n := agent()
 		e := a.effort
 		if e == "" {
 			e = "default"
 		}
-		return n + ", effort: " + e + ". Enter opens the list."
+		return n + ", effort: " + e + "."
 	case "remove":
 		_, n := agent()
 		return "Remove " + strings.ToLower(n[:1]) + n[1:] + ", button"

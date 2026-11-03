@@ -3,12 +3,15 @@ package dash
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/dethmasque/ackn4th/internal/event"
 	"github.com/dethmasque/ackn4th/internal/task"
 	"github.com/dethmasque/ackn4th/internal/tips"
+	"github.com/dethmasque/ackn4th/internal/voice"
 )
 
 type fakeSpeaker struct{ said []string }
@@ -34,6 +37,10 @@ func keyMsg(k string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyEscape}
 	case "V":
 		return tea.KeyPressMsg{Code: 'v', Text: "V", Mod: tea.ModShift}
+	case "alt+w":
+		return tea.KeyPressMsg{Code: 'w', Mod: tea.ModAlt}
+	case "f4":
+		return tea.KeyPressMsg{Code: tea.KeyF4}
 	}
 	return tea.KeyPressMsg{Code: rune(k[0]), Text: k}
 }
@@ -49,17 +56,29 @@ func TestVoiceReadsTheDashboard(t *testing.T) {
 
 	cmd := m.toggleVoice() // v
 	m.Update(cmd())
-	if !strings.HasPrefix(sp.last(), "voice on") || !strings.Contains(sp.last(), "Task list, 1 of 1: task Add DELETE") {
-		t.Fatalf("on: %q", sp.last())
+	// Turning it on says how to use it, then what is selected.
+	for _, want := range []string{"Voice on.", "Press w", "i to hear more", "o to hear what you can do", "Question mark opens help, which lists every key", "F2, F3 and F4", "Task 1 of 1: Add DELETE"} {
+		if !strings.Contains(sp.last(), want) {
+			t.Fatalf("on: want %q in %q", want, sp.last())
+		}
 	}
-	steps := []struct{ key, want string }{
-		{"tab", "overview tab of task Add DELETE"},
-		{"?", "Keys. up, down, j, k: select a task"},
-		{"esc", "overview tab"},
-		{"n", "New task. Prompt, text field: empty"},
-		{"h", ""}, // typing isn't echoed
-		{"tab", "Task name, text field, empty: it will be called h"},
-		{"tab", "Workspace directory: ~/code/todo-api"},
+	steps := []struct{ key, want, not string }{
+		{"down", "Task 1 of 1", "Round"}, // moving says only what is selected
+		{"tab", "overview tab of task Add DELETE", "Round"},
+		{"w", "The overview tab of task Add DELETE", ""},
+		{"i", "Its latest handoff", ""},
+		{"o", "Enter zooms into the agent", ""},
+		{"o", "s stops it", "r resumes"},
+		{"?", "Keys. up, down, j, k: select a task", ""},
+		{"w", "The keys panel", ""}, // answered without closing it
+		{"esc", "Agent 1 of 3", "Keys."},
+		{"n", "New task. Prompt, text field: empty", "Tab moves"},
+		{"h", "", ""}, // typing isn't echoed
+		{"w", "", ""}, // nor are letters that are voice keys elsewhere
+		{"alt+w", "The new task form. New task. Prompt, text field: hw", ""},
+		{"f4", "Type to edit", ""},
+		{"tab", "Task name, text field, empty: it will be called hw", ""},
+		{"tab", "Workspace directory: ~/code/todo-api", ""},
 	}
 	for _, s := range steps {
 		n := len(sp.said)
@@ -70,9 +89,15 @@ func TestVoiceReadsTheDashboard(t *testing.T) {
 			}
 			continue
 		}
-		if !strings.Contains(sp.last(), s.want) {
-			t.Errorf("%s: said %q, want %q", s.key, sp.last(), s.want)
+		if len(sp.said) != n+1 {
+			t.Errorf("%s: said %d phrases, want 1: %q", s.key, len(sp.said)-n, sp.said[n:])
 		}
+		if !strings.Contains(sp.last(), s.want) || s.not != "" && strings.Contains(sp.last(), s.not) {
+			t.Errorf("%s: said %q, want %q (and not %q)", s.key, sp.last(), s.want, s.not)
+		}
+	}
+	if !m.help && m.form == nil {
+		t.Error("the form should be open")
 	}
 	if len(saved) != 1 || !saved[0] {
 		t.Errorf("saved %v", saved)
@@ -135,8 +160,9 @@ func TestVoiceSummarizesTasks(t *testing.T) {
 		t.Fatal("expected the task-list tip on screen")
 	}
 
-	said := m.where()
-	for _, want := range []string{"Task list, 1 of 1: task Add DELETE", "Round 1 of 10", "1 open to-do", "Decide whether DELETE", "Prompt: Add DELETE"} {
+	m.Update(keyMsg("i"))
+	said := sp.last()
+	for _, want := range []string{"Task Add DELETE", "Round 1 of 10", "1 open to-do", "Decide whether DELETE", "Prompt: Add DELETE"} {
 		if !strings.Contains(said, want) {
 			t.Errorf("task list: want %q in %q", want, said)
 		}
@@ -147,16 +173,24 @@ func TestVoiceSummarizesTasks(t *testing.T) {
 
 	opt.Tips.Done("dash.tasks")
 	m.Update(keyMsg("tab"))
-	if !strings.Contains(sp.last(), "overview tab of task Add DELETE") || !strings.Contains(sp.last(), "Round 1 of 10") {
-		t.Errorf("entering the task should summarize it: %q", sp.last())
+	if !strings.Contains(sp.last(), "overview tab of task Add DELETE") || strings.Contains(sp.last(), "Round 1 of 10") {
+		t.Errorf("entering the task should name it, briefly: %q", sp.last())
 	}
 	m.Update(keyMsg("j"))
-	if strings.Contains(sp.last(), "Round 1") || !strings.Contains(sp.last(), "Agent 2 of") {
+	if strings.Contains(sp.last(), "overview tab") || !strings.Contains(sp.last(), "Agent 2 of") {
 		t.Errorf("moving within the tab should say only the selection: %q", sp.last())
 	}
+	m.Update(keyMsg("i"))
+	if !strings.Contains(sp.last(), "Agent 2 of 3, qa_engineer on claude") {
+		t.Errorf("i should say all about the agent: %q", sp.last())
+	}
 	m.Update(keyMsg("4"))
-	if !strings.Contains(sp.last(), "messages tab") || !strings.Contains(sp.last(), "handed off") && !strings.Contains(sp.last(), "No handoffs") {
+	if sp.last() != "messages tab of task Add DELETE /todos/{id} with tests, and…, running." {
 		t.Errorf("messages tab: %q", sp.last())
+	}
+	m.Update(keyMsg("i"))
+	if !strings.Contains(sp.last(), "handed off") && !strings.Contains(sp.last(), "No handoffs") {
+		t.Errorf("i on the messages tab: %q", sp.last())
 	}
 }
 
@@ -192,5 +226,33 @@ func TestArrowsStayInFocusedPane(t *testing.T) {
 	m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	if m.agent == start {
 		t.Error("in the task's pane, → should pick the next agent")
+	}
+}
+
+// The voice says an event in words: a clock time as people say it, the
+// round, the whole role, and numbers with their units.
+func TestSpokenEvent(t *testing.T) {
+	m := newModel(Options{Store: fixture(t)})
+	l := m.current()
+	l.Task.Agents[0].Role = "software_architect"
+	at := time.Date(2026, 11, 3, 12, 7, 5, 0, time.Local)
+	ended := event.Event{Time: at, Kind: event.TurnEnded, Round: 4, Agent: 1, InTok: 2140, CacheTok: 856, OutTok: 812, CtxTok: 30500}
+	got := m.spokenEvent(l, ended, false)
+	want := "at 12:07 PM, in round 4, software_architect's turn ended. It read about 2100 tokens of input, 40 percent of it from the cache, and wrote 812 tokens."
+	if got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+	full := m.spokenEvent(l, ended, true)
+	for _, w := range []string{"ago", "(agent 1, on ", "Its context held about 30500 tokens."} {
+		if !strings.Contains(full, w) {
+			t.Errorf("full: want %q in %q", w, full)
+		}
+	}
+	call := event.Event{Time: at, Kind: event.ToolCall, Round: 4, Agent: 1, Tool: "read_file", Text: "main.go"}
+	if got := m.spokenEvent(l, call, false); got != "at 12:07 PM, in round 4, software_architect used the tool read_file, on main.go." {
+		t.Errorf("%q", got)
+	}
+	if got := voice.Normalize(m.spokenEvent(l, call, false)); !strings.Contains(got, "twelve oh seven P M") || !strings.Contains(got, "software architect used the tool read file") {
+		t.Errorf("spoken: %q", got)
 	}
 }

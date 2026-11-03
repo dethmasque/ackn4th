@@ -44,10 +44,12 @@ func loadPhonemizer(lexicon string) (*phonemizer, error) {
 
 // extraWords are software words the lexicon lacks, as Kokoro phonemes.
 var extraWords = map[string]string{
-	"dev":    "dˈɛv",
-	"devops": "dˈɛvˌɑps",
+	"acknforth": "ˌækənfˈɔɹθ", // ack-'n-forth, like back-and-forth
+	"dev":       "dˈɛv",
+	"devops":    "dˈɛvˌɑps",
 	// compound would split it as fulls tack.
 	"fullstack": "fˈʊlstˌæk",
+	"backend":   "back,end",
 	"repo":      "ɹˈipO",
 	"config":    "kˈɑnfɪɡ",
 	"async":     "ˈAsˌɪŋk",

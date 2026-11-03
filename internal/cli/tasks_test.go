@@ -8,8 +8,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dethmasque/ackn4th/internal/config"
+	"github.com/dethmasque/ackn4th/internal/dash"
 	"github.com/dethmasque/ackn4th/internal/task"
 	"github.com/dethmasque/ackn4th/internal/tips"
 	"github.com/dethmasque/ackn4th/internal/ui"
@@ -117,5 +119,62 @@ func TestDashOffersSetup(t *testing.T) {
 	}
 	if opt.Setup == nil || opt.Setup.Status == nil || opt.Setup.Done == nil {
 		t.Errorf("setup = %+v", opt.Setup)
+	}
+}
+
+// A follow-up can change agents' roles, models and efforts: a new model
+// starts that agent's conversation fresh, and every agent is told.
+func TestChangeTeam(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	a := &app{cfg: config.Default(), store: task.NewStore(t.TempDir())}
+	tk := &task.Task{Prompt: "p", Workspace: t.TempDir(), Status: task.Completed, Agents: []task.AgentSpec{
+		{Role: "backend_dev", Provider: "claude", Model: "claude-opus-5-5", Effort: "high"},
+		{Role: "qa_engineer", Provider: "claude", Model: "claude-opus-5-5", Effort: "high"},
+	}}
+	if err := a.store.Create(tk); err != nil {
+		t.Fatal(err)
+	}
+	tk.Started = []bool{true, true}
+	if err := tk.AddFollowUp("more", -1, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	same := []dash.NewAgent{
+		{Role: "backend_dev", Provider: "claude", Model: "claude-opus-5-5", Effort: "high"},
+		{Role: "qa_engineer", Provider: "claude", Model: "claude-opus-5-5", Effort: "high"},
+	}
+	if err := a.changeTeam(tk, same); err != nil || tk.FollowUps[0].Changes != nil {
+		t.Fatalf("no change: %v %v", err, tk.FollowUps[0].Changes)
+	}
+	team := []dash.NewAgent{
+		{Role: "backend_dev+tech_lead", Provider: "claude", Model: "claude-opus-5-5", Effort: "max"},
+		{Role: "qa_engineer", Provider: "claude", Model: "claude-sonnet-5-5", Effort: "high"},
+	}
+	if err := a.changeTeam(tk, team); err != nil {
+		t.Fatal(err)
+	}
+	b, q := tk.Agents[0], tk.Agents[1]
+	if b.Role != "backend_dev+tech_lead" || b.Effort != "max" || !tk.Started[0] {
+		t.Errorf("a new role and effort keep the conversation: %+v started %v", b, tk.Started[0])
+	}
+	if q.Model != "claude-sonnet-5-5" || tk.Started[1] {
+		t.Errorf("a new model starts fresh: %+v started %v", q, tk.Started[1])
+	}
+	ch := strings.Join(tk.FollowUps[0].Changes, "\n")
+	for _, w := range []string{"agent 1 is now backend_dev+tech_lead (was backend_dev), uses max effort (was high)", "agent 2 runs on model claude-sonnet-5-5"} {
+		if !strings.Contains(ch, w) {
+			t.Errorf("want %q in %q", w, ch)
+		}
+	}
+	bad := [][]dash.NewAgent{
+		team[:1],
+		{team[0], {Role: "qa_engineer", Provider: "gemini", Model: "x"}},
+		{team[0], {Role: "no_such_role", Provider: "claude", Model: "claude-opus-5-5"}},
+	}
+	for i, b := range bad {
+		if err := a.changeTeam(tk, b); err == nil {
+			t.Errorf("%d: should fail", i)
+		}
 	}
 }

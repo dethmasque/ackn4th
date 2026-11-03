@@ -54,6 +54,8 @@ type run struct {
 	systems []provider.System // each agent's system prompt
 	tools   []provider.ToolSpec
 	warmed  bool // shared prompts were prewarmed this run
+	// changed counts the files each agent has changed this run.
+	changed map[int]int
 }
 
 // setup builds the agents, their tools and the shared state.
@@ -117,6 +119,10 @@ func (r *Runner) setup(t *Task) (*run, error) {
 		Changed: func(n int, p string) {
 			rn.mu.Lock()
 			rn.sh.Authors[p] = rn.labels[n-1]
+			if rn.changed == nil {
+				rn.changed = map[int]int{}
+			}
+			rn.changed[n-1]++
 			rn.mu.Unlock()
 		},
 		Send:    rn.send,
@@ -166,7 +172,7 @@ func (r *Runner) setup(t *Task) (*run, error) {
 				WS: ws, Notes: rn.book, Team: tm, Self: n, Commands: cmds,
 				Author: fmt.Sprintf("%s (%s, task %s)", spec.Role, spec.Provider, t.ID),
 			},
-			MaxSteps: r.MaxSteps, Authorize: func() error { return r.authorize(spec.Provider) },
+			MaxSteps: r.MaxSteps, Solo: len(t.Agents) == 1, Authorize: func() error { return r.authorize(spec.Provider) },
 			Inbox: func() (string, func()) { return rn.inbox(n) },
 			Emit: func(e event.Event) {
 				e.Round = t.Round
@@ -433,6 +439,9 @@ func (rn *run) turn(ctx context.Context, n int, input string) (agent.TurnResult,
 		}
 		return writeAtomic(rn.r.Store.AgentStatePath(t.ID, n), state)
 	}
+	rn.mu.Lock()
+	changedBefore := rn.changed[n]
+	rn.mu.Unlock()
 	res, err := a.Turn(ctx, input, persist)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -458,11 +467,49 @@ func (rn *run) turn(ctx context.Context, n int, input string) (agent.TurnResult,
 		s.NotesSeen = ""
 	}
 	s.Done, s.DoneSummary = res.Done, res.DoneSummary
+	s.SameHandoffs, s.Idle = 0, 0
+	if s.Turns > 1 && !res.Done && res.Message == spec.Message {
+		s.SameHandoffs = spec.SameHandoffs + 1
+	}
+	if res.Cut && !res.Done && rn.changed[n] == changedBefore {
+		s.Idle = spec.Idle + 1
+	}
 	s.Message, s.MessageRound, s.RoundDone = res.Message, t.Round, t.Round
 	// Follow-ups can't be added while the task runs, so the input had
 	// them all.
 	s.FollowUpsSeen = len(t.FollowUps)
 	return res, rn.r.Store.Save(t)
+}
+
+// StuckError stops a task whose agent is going in circles, before it
+// spends more: the same handoff three turns running, or two turns in a
+// row out of tool calls (or repeating itself) without changing a file.
+type StuckError struct{ msg string }
+
+func (e *StuckError) Error() string { return e.msg }
+
+func stuck(t *Task, n int) error {
+	s := t.Agents[n]
+	who := fmt.Sprintf("agent %d (%s, %s %s)", n+1, s.Role, s.Provider, s.Model)
+	var what string
+	switch {
+	case s.SameHandoffs >= 2:
+		what = fmt.Sprintf("gave the same handoff three turns running (“%s”)", oneLine(s.Message, 80))
+	case s.Idle >= 2:
+		what = "used its turn up two turns running without changing a file or handing off"
+	default:
+		return nil
+	}
+	return &StuckError{fmt.Sprintf("%s %s: it looks stuck, so the task stopped to save cost. Resume it on another model or provider, or give it a follow-up", who, what)}
+}
+
+// oneLine is s on one line, at most n runes.
+func oneLine(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > n {
+		s = string(r[:n-1]) + "…"
+	}
+	return s
 }
 
 // sequential runs agents one at a time, each handing off to the next.
@@ -490,6 +537,9 @@ func (rn *run) sequential(ctx context.Context) error {
 			err = serr
 		}
 		if err != nil {
+			return err
+		}
+		if err := stuck(t, n); err != nil {
 			return err
 		}
 
@@ -576,6 +626,13 @@ func (rn *run) parallel(ctx context.Context) error {
 				return err
 			}
 		}
+		// A stuck agent stops the task once the round is over, so its
+		// teammates' turns aren't cut short.
+		for _, n := range due {
+			if err := stuck(t, n); err != nil {
+				return err
+			}
+		}
 
 		// The round is complete.
 		if allDone(t) {
@@ -622,6 +679,9 @@ func (rn *run) input(n int, briefing string) string {
 	// agent's first turn has the task above, so it gets all of them.
 	for _, f := range t.pendingFollowUps(n) {
 		fmt.Fprintf(&b, "\n# Follow-up from the person who gave the task (round %d)\n\nThe task was finished; this is more work for the team, in the same workspace. Every agent has to declare done again.\n\n%s\n", f.Round, f.Prompt)
+		if len(f.Changes) > 0 {
+			fmt.Fprintf(&b, "\nThe team changed for this follow-up (the roles above are current):\n\n- %s\n", strings.Join(f.Changes, "\n- "))
+		}
 	}
 	if t.Started[n] && t.Solo() {
 		b.WriteString("Continue working on the task. Call declare_done once it is complete.\n")

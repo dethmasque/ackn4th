@@ -13,6 +13,9 @@ type FollowUp struct {
 	Prompt string    `json:"prompt"`
 	Round  int       `json:"round"` // the round it starts in
 	Time   time.Time `json:"time"`
+	// Changes says how the team changed with it (a role, a model or an
+	// effort), so every agent knows who it is working with now.
+	Changes []string `json:"changes,omitempty"`
 }
 
 // AddFollowUp queues a follow-up for t, which must not be running: every
