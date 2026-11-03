@@ -1,8 +1,9 @@
-//go:build linux || windows
+//go:build linux || (windows && winsandbox)
 
 package sandbox
 
 import (
+	"fmt"
 	"io/fs"
 	"path/filepath"
 
@@ -13,13 +14,24 @@ import (
 const maxScan = 20000
 
 // secretFiles lists the credential files in the workspace (.env, *.pem,
-// ...), which commands must not read.
-func secretFiles(ws string) []string {
+// ...), which commands must not read. If the workspace itself can't be
+// read, it fails: commands then don't run, rather than run with secrets
+// that weren't found.
+func secretFiles(ws string) ([]string, error) {
 	var out []string
 	n := 0
-	filepath.WalkDir(ws, func(p string, d fs.DirEntry, err error) error {
-		if n++; err != nil || n > maxScan {
-			return filepath.SkipDir
+	err := filepath.WalkDir(ws, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if p == ws {
+				return err
+			}
+			if d != nil && d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if n++; n > maxScan {
+			return filepath.SkipAll
 		}
 		if d.IsDir() {
 			switch d.Name() {
@@ -33,5 +45,8 @@ func secretFiles(ws string) []string {
 		}
 		return nil
 	})
-	return out
+	if err != nil {
+		return nil, fmt.Errorf("looking for credential files in the workspace: %w", err)
+	}
+	return out, nil
 }

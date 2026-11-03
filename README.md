@@ -125,11 +125,12 @@ Agents' commands run in the OS's own sandbox
 - **macOS:** built in.
 - **Linux:** install [bubblewrap](https://github.com/containers/bubblewrap)
   (`apt install bubblewrap`).
-- **Windows** 10 (1607 or later) or 11: built in. The Codex, Cursor and
-  Copilot providers also need one setting changed once, as administrator;
-  ackn4th prints the command the first time you use one. The examples in
-  these docs are written for a Unix shell, and `~/` means your user folder
-  (`%USERPROFILE%`).
+- **Windows** 10 or 11: there is no sandbox, so agents can't run commands
+  there. They still read, write and search files with ackn4th's own tools.
+  The Codex, Cursor and Copilot providers need the sandbox, so they aren't
+  available; under [WSL](https://learn.microsoft.com/windows/wsl/), ackn4th
+  works as on Linux. The examples in these docs are written for a Unix
+  shell, and `~/` means your user folder (`%USERPROFILE%`).
 
 Optional: the [GitHub CLI](https://cli.github.com) (`gh`), for
 [GitHub issues, repositories and draft pull requests](internal/github/README.md).

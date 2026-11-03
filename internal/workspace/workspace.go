@@ -441,7 +441,7 @@ func (w *Workspace) List(rel string, depth, max int) ([]Entry, bool, error) {
 	}
 	err = fs.WalkDir(w.root.FS(), c, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			return skipUnreadable(p, c, d, err)
 		}
 		if p == c {
 			return nil
@@ -472,6 +472,19 @@ func (w *Workspace) List(rel string, depth, max int) ([]Entry, bool, error) {
 	return out, truncated, w.relErr(err)
 }
 
+// skipUnreadable handles an error during a walk from c: one unreadable
+// file or folder (a junction, a permission) is skipped instead of ending
+// the walk with nothing, but failing to read c itself is an error.
+func skipUnreadable(p, c string, d fs.DirEntry, err error) error {
+	if p == c {
+		return err
+	}
+	if d != nil && d.IsDir() {
+		return fs.SkipDir
+	}
+	return nil
+}
+
 // Match is one search hit.
 type Match struct {
 	Path string
@@ -494,7 +507,7 @@ func (w *Workspace) Search(pattern, rel, glob string, max int) ([]Match, bool, e
 	truncated := false
 	err = fs.WalkDir(w.root.FS(), c, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			return skipUnreadable(p, c, d, err)
 		}
 		if d.IsDir() {
 			if p != c && (skipDirs[d.Name()] || w.isHidden(p)) {

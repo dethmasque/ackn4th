@@ -109,32 +109,36 @@ goes through an `os.Root` opened on the task workspace:
 Agents verify their work with `run_command`: builds, tests, linters, type
 checkers, running the code. Each command runs under the operating system's
 sandbox (Seatbelt via `sandbox-exec` on macOS,
-[bubblewrap](https://github.com/containers/bubblewrap) on Linux, an
-AppContainer on Windows), not on trust:
+[bubblewrap](https://github.com/containers/bubblewrap) on Linux), not on
+trust. Windows has none in release builds (below), so commands don't run
+there at all:
 
 - writes are allowed only in the workspace and the agent's private scratch
   directory (`tasks/<id>/scratch/N`), which serves as the home and temp
-  directories (`HOME` and `TMPDIR`; `USERPROFILE`, `APPDATA` and `TEMP` on
-  Windows) and the tool caches (`GOCACHE`, npm, pip). Nothing system-wide or
-  user-wide can change: no dotfiles, no `/tmp`, no global installs. `.git`
-  and `.ackn4th` stay read-only, and a read-only role's commands can't write
-  the workspace;
+  directories (`HOME` and `TMPDIR`) and the tool caches (`GOCACHE`, npm, pip). 
+  Nothing system-wide or user-wide can change: no dotfiles, no `/tmp`, no 
+  global installs. `.git` and `.ackn4th` stay read-only, and a read-only 
+  role's commands can't write the workspace;
 - secrets can't be read: `~/.ssh`, `~/.aws`, `~/.kube`, `~/.docker`, gcloud
   and gh configs, `.netrc`/`.npmrc`, keychains, browser profiles,
   `~/.claude`, ackn4th's own config and data, and credential files in the
   workspace (`.env`, `*.pem`, …);
 - the network is off unless `commands.network: true`. Localhost still works,
-  for tests that start a server (on Windows, once the loopback setting below
-  is made);
+  for tests that start a server;
 - the environment is rebuilt from an allowlist (`PATH`, locale, toolchain
   homes), so tokens in your shell never reach a command;
 - on macOS, commands can't open apps, send Apple Events or reach the
   keychain, so nothing they start runs outside the sandbox;
 - each command has a time limit (`commands.timeout`, default 10m), and
-  everything it started is killed when it runs out (its process group, or
-  its job object on Windows).
+  everything it started is killed when it runs out (its process group).
 
-**On Windows**, commands run with `cmd.exe`. An AppContainer can read the
+**On Windows**, release builds have no sandbox: `run_command` is
+unavailable, and so are the Codex, Cursor and Copilot providers. An
+AppContainer sandbox exists in the code but is built only with
+`-tags winsandbox`, because it doesn't yet pass the confinement tests
+(CI runs them on Windows in a separate, non-blocking step). A sandbox that
+lets commands read `.env` is worse than none. The design, for when it
+passes: commands run with `cmd.exe`. An AppContainer can read the
 system (Windows, Program Files) and none of your files unless their access
 list allows it. So the first time a workspace, scratch directory or tool
 folder on your `PATH` is used, ackn4th adds an entry to its access list
@@ -153,7 +157,7 @@ Agents still change files only through the file tools, so their writes are
 checked against their role's globs. Files a command changes (generated
 code, formatters) are credited to the agent that ran it, and it must
 re-read them before editing. Without a sandbox (Linux where `bwrap` is
-missing or can't create namespaces, or Windows older than 10 1607),
+missing or can't create namespaces, or Windows),
 `run_command` is unavailable rather than unconfined. The
 [container](../../container/README.md) always has one.
 `commands.enabled: false` turns it off.
@@ -206,9 +210,8 @@ The CLIs' own sandboxes and approval prompts are turned off
 `--allow-all-tools`), because a sandbox can't be nested inside another and
 nobody is there to approve: ackn4th's sandbox is the boundary. Your custom
 instructions and MCP servers are not loaded. Without a working sandbox
-(Linux without `bwrap`), these providers refuse to run: use the container,
-where they work under bubblewrap. On Windows they also need the loopback
-setting above.
+(Linux without `bwrap`, or Windows), these providers refuse to run: use the
+container, where they work under bubblewrap, or WSL on Windows.
 
 ## GitHub
 
@@ -225,8 +228,12 @@ each command only, never in your git config. See
 sandbox.go            the Config every backend takes: workspace, scratch, read-only dirs, network
 sandbox_darwin.go     Seatbelt profile (sandbox-exec)
 sandbox_linux.go      bubblewrap arguments
-sandbox_windows.go    AppContainer, access-list entries, job objects (winutil.go: Win32 helpers)
+sandbox_windows.go    AppContainer, access-list entries, job objects (winutil.go: Win32 helpers);
+                      only with -tags winsandbox
+sandbox_windows_off.go  Windows release builds: no sandbox, so run_command is unavailable
 sandbox_other.go      elsewhere: no sandbox, so run_command is unavailable
-secrets.go            the credential files hidden from commands (Linux, Windows)
+program_*.go          resolving the program to start (Windows: npm .cmd shims run with node)
+secrets.go            the credential files hidden from commands (Linux; Windows with the tag);
+                      if the workspace can't be read, commands don't run
 proc_*.go             process groups and killing a command's whole tree
 ```

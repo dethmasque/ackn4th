@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,31 @@ func open(t *testing.T, writable ...string) (*Workspace, string) {
 	}
 	t.Cleanup(func() { w.Close() })
 	return w, dir
+}
+
+// Listing and searching find what's there. On Windows they once found
+// nothing at all, with the error thrown away by every caller: this says
+// why if it happens again.
+func TestListAndSearch(t *testing.T) {
+	w, dir := open(t, "**")
+	os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("needle\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "sub", "b.txt"), []byte("hay\nneedle\n"), 0o644)
+
+	entries, _, err := w.List(".", 5, 50)
+	if err != nil || len(entries) != 3 {
+		t.Errorf("List = %+v, %v (dir %s, hidden %q)", entries, err, dir, w.hidden)
+	}
+	hits, _, err := w.Search("needle", ".", "", 10)
+	if err != nil || len(hits) != 2 || hits[1].Path != "sub/b.txt" || hits[1].Line != 2 {
+		t.Errorf("Search = %+v, %v (dir %s, hidden %q)", hits, err, dir, w.hidden)
+	}
+	if _, err := w.root.Stat("."); err != nil {
+		t.Errorf("stat the root: %v", err)
+	}
+	if _, err := fs.ReadDir(w.root.FS(), "."); err != nil {
+		t.Errorf("read the root: %v", err)
+	}
 }
 
 func TestEscapesAreRejected(t *testing.T) {

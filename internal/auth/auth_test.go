@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -196,6 +197,13 @@ func TestGeminiKeyLifecycle(t *testing.T) {
 
 func TestSecretsDir(t *testing.T) {
 	dir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		t.Setenv(SecretsDirEnv, dir)
+		if err := secretSet("svc", "u", "v"); err == nil {
+			t.Fatal("Windows can't check the directory is private: it should be refused")
+		}
+		return
+	}
 	os.Chmod(dir, 0o755)
 	t.Setenv(SecretsDirEnv, dir)
 	if err := secretSet("svc", "u", "v"); err == nil {

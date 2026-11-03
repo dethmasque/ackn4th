@@ -1,7 +1,8 @@
 # Tests on each OS ackn4th supports, including its sandbox: Seatbelt on
-# macOS, AppContainer on Windows. (GitHub's Ubuntu runners restrict user
-# namespaces, so the bubblewrap tests skip there; `just test-linux` runs
-# them in a container.)
+# macOS. (GitHub's Ubuntu runners restrict user namespaces, so the
+# bubblewrap tests skip there; `just test-linux` runs them in a
+# container.) Windows release builds have no sandbox; the AppContainer one
+# is built with -tags winsandbox and tested on its own until it confines.
 name: ci
 on:
   push:
@@ -36,3 +37,7 @@ jobs:
           go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
           go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - run: go test ./...
+      - name: AppContainer sandbox (not in release builds yet)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        run: go test -tags winsandbox ./internal/sandbox/... ./internal/tools/... ./internal/provider/cliagent/...
