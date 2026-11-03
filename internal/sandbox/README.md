@@ -134,6 +134,18 @@ AppContainer on Windows), not on trust:
   everything it started is killed when it runs out (its process group, or
   its job object on Windows).
 
+**Windows status.** The Windows sandbox is **not part of the 0.1.0
+release**. It ships only after the in-sandbox tests in
+`sandbox_windows_security_test.go` pass on a real Windows runner (the
+`windows-sandbox` CI job) and the open items in the
+[threat model](../../docs/security/threat-model.md) are closed. Known
+differences from Linux and macOS until then: once the loopback setting below
+is made, *every* sandboxed command (even with the network off) can reach
+services on the machine's localhost, because Windows exempts the whole
+AppContainer profile, not one process; and credential files created after a
+command starts are not protected by name. Without a working sandbox
+`run_command` and the Codex, Cursor and Copilot providers refuse to run.
+
 **On Windows**, commands run with `cmd.exe`. An AppContainer can read the
 system (Windows, Program Files) and none of your files unless their access
 list allows it. So the first time a workspace, scratch directory or tool
@@ -227,6 +239,7 @@ sandbox_darwin.go     Seatbelt profile (sandbox-exec)
 sandbox_linux.go      bubblewrap arguments
 sandbox_windows.go    AppContainer, access-list entries, job objects (winutil.go: Win32 helpers)
 sandbox_other.go      elsewhere: no sandbox, so run_command is unavailable
-secrets.go            the credential files hidden from commands (Linux, Windows)
+secrets.go            the credential files hidden from commands (Linux, Windows). Fails
+                      closed: a workspace too big to scan (250,000 entries) refuses commands
 proc_*.go             process groups and killing a command's whole tree
 ```

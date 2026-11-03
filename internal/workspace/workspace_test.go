@@ -218,12 +218,12 @@ func TestProtectedAliases(t *testing.T) {
 }
 
 func TestWinAlias(t *testing.T) {
-	for _, seg := range []string{"x:stream", "GIT~1", ".git.", ".git ", "PROGRA~2"} {
+	for _, seg := range []string{"x:stream", "GIT~1", ".git.", ".git ", "PROGRA~2", "NUL", "con.txt", "Com1", "LPT9.log", "aux", "CONOUT$"} {
 		if !winAlias(seg) {
 			t.Errorf("%q should count as an alias", seg)
 		}
 	}
-	for _, seg := range []string{".git", "main.go", "a~b", "v1.2", "file~"} {
+	for _, seg := range []string{".git", "main.go", "a~b", "v1.2", "file~", "console.go", "nullable", "com10", "auxiliary.txt", "lpt"} {
 		if winAlias(seg) {
 			t.Errorf("%q is a plain name", seg)
 		}

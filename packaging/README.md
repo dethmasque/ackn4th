@@ -22,9 +22,12 @@ through `go run` (set `GORELEASER=goreleaser` to use an installed copy).
 | --- | --- |
 | `ackn4th_darwin_amd64.tar.gz`, `ackn4th_darwin_arm64.tar.gz` | macOS, Intel and Apple silicon |
 | `ackn4th_linux_amd64.tar.gz`, `ackn4th_linux_arm64.tar.gz` | any Linux |
-| `ackn4th_windows_amd64.zip`, `ackn4th_windows_arm64.zip` | Windows |
 | `ackn4th_linux_<arch>.deb` / `.rpm` / `.apk` | Debian/Ubuntu, Fedora/RHEL, Alpine (installs to `/usr/bin`, recommends `gnome-keyring`) |
 | `checksums.txt` | SHA-256 of every file |
+
+Windows zips are not built until the `windows-sandbox` CI job is green
+(docs/adr/0001-windows-release-gate.md); to re-enable, follow the comments
+in `goreleaser.yaml` and restore the Windows row here.
 
 Archives hold the binary, `LICENSE`, `README.md` and the built-in roles.
 File names carry no version, so

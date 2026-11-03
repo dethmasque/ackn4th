@@ -13,7 +13,31 @@ permissions:
   contents: read
 
 jobs:
+  # The gate for shipping Windows: in-sandbox security tests on a real
+  # Windows runner, none skipped. Don't enable Windows in goreleaser until
+  # this is green (docs/adr/0001-windows-release-gate.md).
+  windows-sandbox:
+    # Skipped on tag builds while Windows isn't released: release.yml calls
+    # this workflow, and an expected-red gate must not block the Linux and
+    # macOS release. Delete this `if` when Windows is enabled in goreleaser,
+    # so the gate then blocks the release.
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    runs-on: windows-2025 # pinned image; bump deliberately
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: sandbox security tests (none may skip)
+        shell: bash
+        run: bash scripts/windows-sandbox-gate.sh
+
   test:
+    # Windows isn't released yet: don't let its tests block a tag build
+    # (see windows-sandbox above). Delete this `if` when enabling Windows.
+    if: ${{ matrix.os != 'windows-2025' || !startsWith(github.ref, 'refs/tags/') }}
     strategy:
       fail-fast: false
       matrix:
@@ -36,3 +60,11 @@ jobs:
           go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
           go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - run: go test ./...
+      - name: cross-compile Windows and the other targets
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -trimpath -o /dev/null ./cmd/ackn4th
+            GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go vet ./...
+          done

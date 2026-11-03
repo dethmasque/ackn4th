@@ -27,7 +27,10 @@ builds:
     binary: ackn4th
     env:
       - CGO_ENABLED=0 # static binaries; the keychain is reached via OS tools, not cgo
-    goos: [linux, windows]
+    # Windows is NOT released until its sandbox is verified on real Windows
+    # (see internal/sandbox/README.md). To re-enable: add `windows` here and
+    # restore the zip format_override in the archives below.
+    goos: [linux]
     goarch: [amd64, arm64]
     flags: [-trimpath]
     ldflags:
@@ -51,9 +54,9 @@ archives:
   - id: ackn4th
     ids: [ackn4th]
     formats: [tar.gz]
-    format_overrides:
-      - goos: windows
-        formats: [zip]
+    # format_overrides:   # re-enable with Windows
+    #   - goos: windows
+    #     formats: [zip]
     # No version in the name, so .../releases/latest/download/<file> is a
     # stable link to the newest release (the README's install commands).
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
