@@ -16,11 +16,11 @@ it doesn't.**
 | Provider | Signed in with | Credential | Lifetime |
 | --- | --- | --- | --- |
 | Claude | `ant auth login --profile ackn4th` | short-lived access token, refreshed by the SDK | refresh token hard-expires server-side |
-| Gemini (default) | AI Studio API key, pasted at login | long-lived key, stored **only in the OS keychain** | usable only during a session; deleted by `logout`; revoke it at AI Studio |
+| Gemini (default) | AI Studio API key, pasted at login | long-lived key, stored **only in the OS keychain** | used only within the 24h sign-in limit; deleted by `logout`; revoke it at AI Studio |
 | Gemini (Vertex AI) | `gcloud auth application-default login` | ~1h access token, refreshed in memory | refresh token revoked daily |
-| Claude Code | Claude Code's own login (`claude auth login`) | none held by ackn4th | Claude Code's; still needs a live ackn4th session |
+| Claude Code | Claude Code's own login (`claude auth login`) | none held by ackn4th | Claude Code's; used only within the 24h sign-in limit |
 | OpenAI | API key, pasted at login | long-lived key, stored **only in the OS keychain** | like the Gemini key; revoke it at platform.openai.com |
-| Codex, Cursor, Copilot | each CLI's own login | none held by ackn4th | the CLI's; still needs a live ackn4th session |
+| Codex, Cursor, Copilot | each CLI's own login | none held by ackn4th | the CLI's; used only within the 24h sign-in limit |
 | GitHub (optional) | `gh auth login` | none held by ackn4th | gh's |
 
 The OS keychain is the Keychain on macOS, the Credential Manager on Windows
@@ -57,12 +57,14 @@ instead of failing mid-turn.
 
 ## Daily deauth
 
-`ackn4th login` starts a session (recorded in the OS keychain) lasting
-`session_ttl`, capped at 24h. The session is checked before every model
-request, not only when a command starts. When it has expired:
+ackn4th has no accounts of its own, but it limits how long it uses the
+providers you sign in to. `ackn4th login` records which providers are
+signed in and until when (in the OS keychain), `session_ttl` from now,
+capped at 24h. That record is checked before every model request, not only
+when a command starts. When it has expired:
 
 1. running tasks stop before their next request (resumable after login);
-2. the session is deleted;
+2. the record is deleted;
 3. OAuth grants are revoked: Gemini's Vertex refresh token is revoked with
    Google and deleted; Claude's tokens are deleted from disk. API keys
    (Gemini, OpenAI) stay in the keychain, unusable until the next login (or
@@ -178,8 +180,8 @@ API credits. ackn4th keeps the tools:
   can't fall back to API billing.
 
 ackn4th stores no credential for it. `ackn4th login --provider claude-code`
-only checks that Claude Code is signed in. A live ackn4th session is still
-required, but `ackn4th logout` leaves Claude Code signed in (use
+only checks that Claude Code is signed in. The 24h sign-in limit still
+applies, but `ackn4th logout` leaves Claude Code signed in (use
 `claude auth logout`). It is experimental: it depends on Claude Code's
 `stream-json` output, and agents share your plan's usage limits. Make sure
 the way you use it fits your plan's terms.

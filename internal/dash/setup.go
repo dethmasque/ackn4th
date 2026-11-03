@@ -235,7 +235,7 @@ func (m *model) drawSetup(lines []string) string {
 		pad := strings.Repeat(" ", max(0, inner-width(yb)-width(nb)-2))
 		add(pad+nb+"  "+yb, pad+buttonShadow("LATER", bg2)+"  "+buttonShadow("SET UP", bg2))
 	} else {
-		add("", pText("Pick the providers you use, then sign in. Ready ones are part of today's session."), "")
+		add("", pText("Pick the providers you use, then sign in. Ready ones stay signed in for up to 24 hours."), "")
 		if v.loading && len(v.states) == 0 {
 			add(pDim(m.spin(spinner) + " checking each provider…"))
 		}

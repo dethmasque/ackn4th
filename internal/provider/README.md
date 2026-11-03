@@ -31,7 +31,7 @@ ready, needing sign-in, or not installed, with the install command.
 ## Signing out
 
 ```sh
-ackn4th logout                                      # every provider: ends the session
+ackn4th logout                                      # every provider
 ackn4th logout --provider openai --provider gemini  # just these; the rest stay signed in
 ```
 

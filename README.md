@@ -166,8 +166,9 @@ How to sign in to each, and how to choose models and efforts per agent:
 
 Agents work in the current directory. The first time they work in a
 directory, ackn4th asks you to **trust** it, since agents read it and send
-its contents to the model provider. Signing in starts a **session** that
-lasts up to 24 hours; after that, `ackn4th login` again.
+its contents to the model provider. ackn4th has no accounts of its own:
+agents run on the AI providers you sign in to, and those sign-ins last up
+to 24 hours; after that, `ackn4th login` signs you in again.
 
 ```sh
 cd ~/code/my-project
@@ -186,21 +187,20 @@ ackn4th
    ([details](internal/voice/README.md)). `ackn4th --voice` opens it
    speaking.
 4. **Start a task.** Press **`n`**. Write the prompt, name the task, pick
-   the workspace (or a GitHub repository and branch), then add agents: a role, provider, model
-   and effort each. **`f1`** explains every field; **`ctrl+s`** launches
-   it in the background.
+   the workspace (or a GitHub repository and branch), then add agents: a role, 
+   provider, model and effort each. **`f1`** explains every field; **`ctrl+s`** 
+   launches it in the background.
 5. **Roles.** `R` lists the roles agents can play; add your own, edit
    any, or import role files ([roles](roles/README.md)).
 6. **Watch.** Each agent works live. `?` lists every key. Quitting the
    dashboard never stops a task.
 
-The same from the shell. A command that's missing something asks for it:
+A command that's missing an argument, value, or flag asks for it, unless
+running in non-interactive (`ACKN4TH_NO_INPUT`) mode. 
 
 ```sh
 ackn4th login                      # pick providers from a numbered list
 ackn4th start-task --name "Rate limiting" --roles backend_dev,code_reviewer "Add rate limiting to the API, with tests"
-ackn4th start-task -d --repo acme/web --branch fix/login --draft-pr \
-  --roles backend_dev,qa_engineer "Fix https://github.com/acme/web/issues/12"
 ackn4th watch-task "Rate limiting" # follow a task by name (or ID); ctrl+c detaches
 ackn4th logout --provider openai   # sign out of one provider (or all, without --provider)
 ```
@@ -232,7 +232,7 @@ The rest of the tree:
 ```
 cmd/ackn4th/          main package
 internal/agent/       one agent's turn loop and system prompt
-internal/auth/        OAuth grants (ant / gcloud), keychain API keys (or a tmpfs dir), the 24h session
+internal/auth/        OAuth grants (ant / gcloud), keychain API keys (or a tmpfs dir), the 24h sign-in limit
 internal/notes/       shared per-project notes
 internal/onboard/     project brief, workspace snapshots, change digests with diffs
 internal/ratelimit/   shared per-key pacing from rate-limit headers

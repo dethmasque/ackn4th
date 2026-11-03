@@ -104,7 +104,7 @@ func (r *Runner) Run(ctx context.Context, id string, background bool) (*Task, er
 		r.emit(t, event.Event{Kind: event.TaskCompleted, Text: t.Reason})
 	case errors.As(runErr, new(unauthorized)):
 		t.Status = Stopped
-		t.Reason = runErr.Error() + "; log in again, then resume"
+		t.Reason = runErr.Error() + "; once signed in again, resume the task"
 		r.emit(t, event.Event{Kind: event.TaskStopped, Text: t.Reason})
 	case errors.Is(runErr, ErrRoundLimit):
 		t.Status = Stopped

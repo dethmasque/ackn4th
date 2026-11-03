@@ -299,7 +299,7 @@ func (a *app) providerState(p string, sess *auth.Session) dash.ProviderState {
 			st.Detail = "ready"
 		}
 	case signedIn:
-		st.Detail = "signed in · join session"
+		st.Detail = "signed in · enter starts using it"
 	case p == "openai":
 		st.Detail = "needs an API key"
 	case p == "gemini" && a.cfg.Providers["gemini"].GeminiAuth() == config.GeminiKey:

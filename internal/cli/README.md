@@ -9,9 +9,9 @@ elsewhere.
 
 | Command | What it does |
 | --- | --- |
-| `login [--provider p]… [--reauth] [--gcp-project id]` | Sign in (a CLI's own login, browser OAuth, or an API key from a prompt or stdin) and start a session |
-| `logout [--provider p]…` | Sign out of every provider (ending the session), or just the ones named. API keys are deleted, OAuth grants revoked; agent CLIs stay signed in |
-| `status` | Session, keys, workspace roots, task counts |
+| `login [--provider p]… [--reauth] [--gcp-project id]` | Sign in (a CLI's own login, browser OAuth, or an API key from a prompt or stdin) for 24 hours at most |
+| `logout [--provider p]…` | Sign out of every provider, or just the ones named. API keys are deleted, OAuth grants revoked; agent CLIs stay signed in |
+| `status` | Signed-in providers, keys, workspace roots, task counts |
 | `start-task --roles a,b [--name n] [--parallel] [--provider p \| --mix] [--agent role,k=v…] [--repo o/n] [--branch b] [--draft-pr] [prompt]` | Put a team on a task: in turns or in parallel, any mix of providers, models and efforts |
 | `run-agent --role r[,r2…] [--name n] [--provider p] [--model m] [--effort e] [--profile n] [prompt]` | Run one agent, in one or more roles, iterating until done |
 | `dash [task] [--voice]` (also `top`) | The dashboard: every task, where each agent is, logs, files, handoffs; start tasks from a form. `--voice` reads it aloud this time |
@@ -85,11 +85,11 @@ So a script does each step explicitly:
 export ACKN4TH_NO_INPUT=1
 cd ~/code/my-project
 
-# 1. Sign in: once a day, since sessions last at most 24h.
+# 1. Sign in to providers: once a day, since sign-ins last at most 24h.
 #    API keys come from stdin, never from a flag or an environment variable:
 op read op://dev/openai/key | ackn4th login --provider openai
 #    An agent CLI already signed in (on this machine, or in the container)
-#    just joins the session:
+#    is just checked and put to use:
 ackn4th login --provider codex
 
 # 2. Trust the workspace up front; nothing can ask later.
@@ -108,7 +108,7 @@ ackn4th list-tasks
 `ackn4th login` with no `--provider`, non-interactively, signs in to every
 provider it can without a key it doesn't already have. Browser sign-ins
 (Claude, and a first CLI login) need a person once. After that, a CLI stays
-signed in, and only the ackn4th session needs renewing. Each task's report
+signed in, and `ackn4th login` only renews ackn4th's 24-hour limit on using it. Each task's report
 is written to `<data>/tasks/<id>/summary.md` (`show-task <id>` prints it).
 
 ## Code

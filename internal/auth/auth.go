@@ -59,10 +59,12 @@ func sessionKey() string {
 var Providers = []string{"claude", "gemini", "claude-code", "openai", "codex", "cursor", "copilot"}
 
 var (
-	// ErrNoSession means nobody has logged in, or the session was ended.
-	ErrNoSession = errors.New("not logged in: run `ackn4th login`")
+	// ErrNoSession means no provider is signed in, or all were signed out.
+	// ackn4th has no accounts of its own: the session only records which
+	// providers were signed in, and until when.
+	ErrNoSession = errors.New("no provider is signed in: run `ackn4th login` to sign in to one")
 	// ErrExpired means the session's TTL has passed.
-	ErrExpired = errors.New("session expired: run `ackn4th login` to start a new one")
+	ErrExpired = errors.New("provider sign-ins expired (they last 24 hours at most): run `ackn4th login` to sign in again")
 )
 
 // ValidProvider reports whether name is a supported provider.
@@ -109,7 +111,7 @@ func Current() (*Session, error) {
 	}
 	var s Session
 	if err := json.Unmarshal([]byte(raw), &s); err != nil {
-		return nil, fmt.Errorf("corrupt session (run `ackn4th login`): %w", err)
+		return nil, fmt.Errorf("unreadable sign-in record (run `ackn4th login`): %w", err)
 	}
 	return &s, nil
 }
@@ -129,7 +131,7 @@ func Require(providers ...string) (*Session, error) {
 	}
 	for _, p := range providers {
 		if !s.Has(p) {
-			return nil, fmt.Errorf("%s was not verified in this session: run `ackn4th login --provider %s`", p, p)
+			return nil, fmt.Errorf("%s isn't signed in: run `ackn4th login --provider %s`", p, p)
 		}
 	}
 	return s, nil

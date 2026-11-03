@@ -17,7 +17,7 @@ import (
 var groups = []*cobra.Group{
 	{ID: "tasks", Title: "TASKS"},
 	{ID: "project", Title: "PROJECT"},
-	{ID: "session", Title: "SESSION"},
+	{ID: "session", Title: "PROVIDERS"},
 	{ID: "info", Title: "INFO"},
 }
 
