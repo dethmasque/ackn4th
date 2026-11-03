@@ -220,8 +220,13 @@ var shortName = regexp.MustCompile(`~[0-9]`)
 // Windows than it appears to: an alternate data stream (name:stream), an
 // 8.3 short name (GIT~1 for .git), or a name Windows trims (".git.").
 func winAlias(seg string) bool {
-	return strings.Contains(seg, ":") || shortName.MatchString(seg) || strings.TrimRight(seg, ". ") != seg
+	return strings.Contains(seg, ":") || shortName.MatchString(seg) || strings.TrimRight(seg, ". ") != seg || winDevice.MatchString(seg)
 }
+
+// winDevice matches the reserved device names (CON, NUL, COM1, ...), with
+// or without an extension: opening one reaches a device, not a file in the
+// workspace.
+var winDevice = regexp.MustCompile(`(?i)^(con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$`)
 
 // CanWrite reports whether rel may be modified.
 func (w *Workspace) CanWrite(rel string) error {

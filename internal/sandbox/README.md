@@ -132,13 +132,19 @@ there at all:
 - each command has a time limit (`commands.timeout`, default 10m), and
   everything it started is killed when it runs out (its process group).
 
-**On Windows**, release builds have no sandbox: `run_command` is
-unavailable, and so are the Codex, Cursor and Copilot providers. An
-AppContainer sandbox exists in the code but is built only with
-`-tags winsandbox`, because it doesn't yet pass the confinement tests
-(CI runs them on Windows in a separate, non-blocking step). A sandbox that
-lets commands read `.env` is worse than none. The design, for when it
-passes: commands run with `cmd.exe`. An AppContainer can read the
+**Windows status.** The Windows sandbox is **not part of the 0.1.0
+release**. It ships only after the in-sandbox tests in
+`sandbox_windows_security_test.go` pass on a real Windows runner (the
+`windows-sandbox` CI job) and the open items in the
+[threat model](../../docs/security/threat-model.md) are closed. Known
+differences from Linux and macOS until then: once the loopback setting below
+is made, *every* sandboxed command (even with the network off) can reach
+services on the machine's localhost, because Windows exempts the whole
+AppContainer profile, not one process; and credential files created after a
+command starts are not protected by name. Without a working sandbox
+`run_command` and the Codex, Cursor and Copilot providers refuse to run.
+
+**On Windows**, commands run with `cmd.exe`. An AppContainer can read the
 system (Windows, Program Files) and none of your files unless their access
 list allows it. So the first time a workspace, scratch directory or tool
 folder on your `PATH` is used, ackn4th adds an entry to its access list
@@ -232,8 +238,7 @@ sandbox_windows.go    AppContainer, access-list entries, job objects (winutil.go
                       only with -tags winsandbox
 sandbox_windows_off.go  Windows release builds: no sandbox, so run_command is unavailable
 sandbox_other.go      elsewhere: no sandbox, so run_command is unavailable
-program_*.go          resolving the program to start (Windows: npm .cmd shims run with node)
-secrets.go            the credential files hidden from commands (Linux; Windows with the tag);
-                      if the workspace can't be read, commands don't run
+secrets.go            the credential files hidden from commands (Linux, Windows). Fails
+                      closed: a workspace too big to scan (250,000 entries) refuses commands
 proc_*.go             process groups and killing a command's whole tree
 ```

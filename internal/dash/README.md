@@ -77,7 +77,9 @@ terminal's own (OSC 52), which is what works over SSH. Holding Option
 
 Text wraps between words and keeps the shape agents and people give it:
 list items wrap under their own text, indentation and blank lines stay,
-and fenced code keeps its spacing.
+and fenced code keeps its spacing. Agents' markdown is drawn, not shown
+as markup: **bold**, *italic*, `code`, headings and links (with their
+address after them), in handoffs, details and the activity log.
 - **FOR YOU** lists the action items agents left for you as they worked:
   decisions only you can make, credentials, manual steps, things they
   couldn't verify.
@@ -99,6 +101,7 @@ and fenced code keeps its spacing.
 | `f` | follow new activity on / off |
 | `s` | stop the task (it saves state; resume any time) |
 | `r` | resume a stopped task in the background |
+| `a` | follow-up: give a task that isn't running more work (the same agents continue; all must declare done again) |
 | `x` | delete a task's records (its workspace files stay) |
 | `n` | new task |
 | `p` | providers: see which are ready, sign in or out |

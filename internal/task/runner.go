@@ -84,6 +84,9 @@ func (r *Runner) Run(ctx context.Context, id string, background bool) (*Task, er
 		how = "resume"
 	}
 	r.emit(t, event.Event{Kind: event.TaskStarted, Text: how})
+	if t.FollowUpPending() {
+		r.emit(t, event.Event{Kind: event.FollowUp, Text: t.FollowUps[len(t.FollowUps)-1].Prompt})
+	}
 
 	var runErr error
 	if rn, err := r.setup(t); err != nil {

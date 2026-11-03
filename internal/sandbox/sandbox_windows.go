@@ -50,8 +50,24 @@ const launcherArg = "__ackn4th-sandbox"
 
 func init() {
 	if len(os.Args) > 2 && os.Args[1] == launcherArg {
+		// The spec on the command line is trusted to name capabilities.
+		// A confined process must not be able to use this entry point to
+		// start something with more of them.
+		if inAppContainer() {
+			fmt.Fprintln(os.Stderr, "ackn4th sandbox: refusing to launch from inside the sandbox")
+			os.Exit(125)
+		}
 		os.Exit(launch(os.Args[2], os.Args[3:]))
 	}
+}
+
+// inAppContainer reports whether this process runs in an AppContainer.
+// It fails closed: if the token can't be read, it says yes.
+func inAppContainer() bool {
+	var v, n uint32
+	const tokenIsAppContainer = 29
+	err := windows.GetTokenInformation(windows.GetCurrentProcessToken(), tokenIsAppContainer, (*byte)(unsafe.Pointer(&v)), 4, &n)
+	return err != nil || v != 0
 }
 
 var (
@@ -69,10 +85,16 @@ const (
 	fileRead    = 0x120089 // FILE_GENERIC_READ
 	fileWrite   = 0x120116 // FILE_GENERIC_WRITE
 	fileExecute = 0x1200A0 // FILE_GENERIC_EXECUTE
-	fileDelete  = 0x10040  // DELETE, FILE_DELETE_CHILD
-	// What deny entries take away: writing (data, attributes, deleting),
-	// and reading (data, listing, extended attributes).
-	denyWrite = 0x2 | 0x4 | 0x10 | 0x100 | fileDelete
+	// DELETE only. Grants must NOT include FILE_DELETE_CHILD (0x40): with
+	// it a command could rename or delete .git/.ackn4th (a deny entry on
+	// the child doesn't override the parent's delete-child right) and
+	// plant its own. With DELETE alone, removing an entry needs DELETE on
+	// that entry, which the deny entries take away.
+	fileDelete = 0x10000
+	// What deny entries take away: writing (data, attributes, deleting
+	// including via the parent), changing the ACL or owner, and reading
+	// (data, listing, extended attributes).
+	denyWrite = 0x2 | 0x4 | 0x10 | 0x100 | 0x40 | 0x40000 | 0x80000 | fileDelete
 	denyRead  = 0x1 | 0x8
 
 	procThreadAttributeSecurityCapabilities = 0x00020009
@@ -184,6 +206,8 @@ var (
 	// toolTried holds tool directories already granted, or that can't be,
 	// so neither is attempted again.
 	toolTried sync.Map
+	// toolGranted records, for each, whether the grant is in place.
+	toolGranted sync.Map
 )
 
 // ensureACE makes sure path's ACL has an explicit entry of typ ("A" allow,
@@ -295,10 +319,23 @@ func wrap(cfg Config, argv []string) ([]string, error) {
 		return nil, err
 	}
 	var caps []string
+	// Every grant besides the workspace's own, to protect where it
+	// overlaps the workspace (a Keep or scratch directory that holds, or
+	// sits inside, the workspace would otherwise expose .git and
+	// credential files to its capability, which the deny entries on the
+	// workspace's capability don't touch).
+	type granted struct {
+		sid  *windows.SID
+		path string
+	}
+	var others []granted
 	grant := func(kind, path string, mask uint32, writable bool) (*windows.SID, error) {
 		sid, err := capability(capName(kind, path))
 		if err != nil {
 			return nil, err
+		}
+		if kind != "ws-rw" && kind != "ws-ro" {
+			others = append(others, granted{sid, path})
 		}
 		if err := ensureACE(path, sid, "A", mask); err != nil {
 			return nil, err
@@ -321,9 +358,11 @@ func wrap(cfg Config, argv []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	var readOnlyPaths []string
 	if !cfg.ReadOnly {
 		for _, d := range []string{".git", ".ackn4th"} {
 			if p := filepath.Join(cfg.Workspace, d); exists(p) {
+				readOnlyPaths = append(readOnlyPaths, p)
 				if err := ensureACE(p, ws, "D", denyWrite); err != nil {
 					return nil, err
 				}
@@ -362,6 +401,24 @@ func wrap(cfg Config, argv []string) ([]string, error) {
 			return nil, err
 		}
 	}
+	// Where another grant covers part of the workspace, apply the same
+	// protections to its capability.
+	for _, o := range others {
+		for _, p := range readOnlyPaths {
+			if within(p, o.path) {
+				if err := ensureACE(p, o.sid, "D", denyWrite); err != nil {
+					return nil, err
+				}
+			}
+		}
+		for _, p := range unreadable {
+			if within(p, o.path) {
+				if err := ensureACE(p, o.sid, "D", denyRead); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
 	// Tools outside the system directories, read-only. Best effort: a
 	// directory the user doesn't own can't be granted, and a tool there
 	// fails to start.
@@ -369,9 +426,22 @@ func wrap(cfg Config, argv []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	hide := hidden(cfg)
 	for _, d := range toolDirs(cfg, append(extra, argv[0])) {
-		if _, tried := toolTried.LoadOrStore(strings.ToLower(d), true); !tried {
-			ensureACE(d, tools, "A", fileRead|fileExecute)
+		key := strings.ToLower(d)
+		if _, tried := toolTried.LoadOrStore(key, true); !tried {
+			toolGranted.Store(key, ensureACE(d, tools, "A", fileRead|fileExecute) == nil)
+		}
+		// Where a hidden path (credentials, ackn4th's own data) sits in a
+		// tool directory, the grant must not reach it. Fail closed.
+		if ok, _ := toolGranted.Load(key); ok == true {
+			for _, h := range hide {
+				if within(h, d) && exists(h) {
+					if err := ensureACE(h, tools, "D", denyRead); err != nil {
+						return nil, err
+					}
+				}
+			}
 		}
 	}
 	caps = append(caps, tools.String())
@@ -409,12 +479,25 @@ func toolDirs(cfg Config, programs []string) []string {
 		if home != "" && within(home, d) {
 			return
 		}
+		// Not inside a hidden path. A hidden path inside d (a toolchain
+		// directory that holds a credentials file, such as ~/.cargo) is
+		// allowed: wrap denies it to the tools capability.
 		for _, h := range hide {
-			if within(d, h) || within(h, d) {
+			if within(d, h) {
 				return
 			}
 		}
-		if within(d, cfg.Workspace) || within(d, cfg.Scratch) || slices.ContainsFunc(out, func(o string) bool { return strings.EqualFold(o, d) }) {
+		// Nor a directory that holds the workspace, scratch or a Keep
+		// directory: read access would reach everything beside them.
+		if within(d, cfg.Workspace) || within(d, cfg.Scratch) || within(cfg.Workspace, d) || within(cfg.Scratch, d) {
+			return
+		}
+		for _, k := range cfg.Keep {
+			if within(k, d) {
+				return
+			}
+		}
+		if slices.ContainsFunc(out, func(o string) bool { return strings.EqualFold(o, d) }) {
 			return
 		}
 		out = append(out, d)
@@ -528,6 +611,16 @@ func launch(enc string, argv []string) int {
 	var limits windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
 	limits.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits))); err != nil {
+		return fail(err)
+	}
+	// Cut the confined tree off from the desktop: no clipboard (it may
+	// hold a password or token), no handles to other windows, no desktop
+	// switching, no changing system parameters, no logging off.
+	ui := windows.JOBOBJECT_BASIC_UI_RESTRICTIONS{UIRestrictionsClass: windows.JOB_OBJECT_UILIMIT_READCLIPBOARD |
+		windows.JOB_OBJECT_UILIMIT_WRITECLIPBOARD | windows.JOB_OBJECT_UILIMIT_HANDLES | windows.JOB_OBJECT_UILIMIT_DESKTOP |
+		windows.JOB_OBJECT_UILIMIT_EXITWINDOWS | windows.JOB_OBJECT_UILIMIT_GLOBALATOMS | windows.JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS |
+		windows.JOB_OBJECT_UILIMIT_DISPLAYSETTINGS}
+	if _, err := windows.SetInformationJobObject(job, windows.JobObjectBasicUIRestrictions, uintptr(unsafe.Pointer(&ui)), uint32(unsafe.Sizeof(ui))); err != nil {
 		return fail(err)
 	}
 

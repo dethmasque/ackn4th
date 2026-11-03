@@ -19,6 +19,7 @@ elsewhere.
 | `watch-task <task>` | Follow a running task live (ctrl+c detaches) |
 | `stop-task <task>` | Gracefully stop a running task (foreground or background) |
 | `resume-task <task> [--rounds n] [--note "…"] [--provider p] [-d]` | Continue a stopped/failed task (`--provider` moves its agents, e.g. to `claude-code`), or attach to a running one |
+| `follow-up <task> ["prompt"] [--rounds n] [-d]` | Give a task that isn't running (completed too) more work: the same agents continue with their conversations and the workspace, every agent gets the prompt, and all must declare done again |
 | `list-tasks [--all]` | Table of tasks, by name: the 20 latest, or all |
 | `rename-task <task> <name>` | Give a task a new name (works while it runs) |
 | `show-task <task>` | Replay a task's transcript and its summary |

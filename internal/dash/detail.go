@@ -205,8 +205,8 @@ func block(s string, w int, style func(string) string) []string {
 // w cells.
 func prose(s string, w int, style func(string) string) []string {
 	var out []string
-	for _, l := range wrap(clean(s), w) {
-		out = append(out, "  "+style(l))
+	for _, l := range markdown(wrap(clean(s), w), style) {
+		out = append(out, "  "+l)
 	}
 	return out
 }
@@ -348,6 +348,12 @@ func (m *model) taskBody(l *Live, inner int) []string {
 	section := func(label string, c rgb) { out = append(out, " "+bold(fgp(c)(label))) }
 	section("PROMPT", lime)
 	out = append(out, prose(t.Prompt, inner, pText)...)
+	for i, f := range t.FollowUps {
+		out = append(out, "")
+		section(fmt.Sprintf("FOLLOW-UP %d · round %d", i+1, f.Round), cyan)
+		out = append(out, prose(f.Prompt, inner, pText)...)
+	}
+	out = append(out, "", " "+bold(pLime("WORKSPACE"))+"  "+pText(tildePath(t.Workspace)))
 	if t.Reason != "" {
 		label, c := "WHY IT STOPPED", amber
 		switch t.Status {

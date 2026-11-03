@@ -279,7 +279,7 @@ your own accounts and under each provider's terms. MIT licensed, no warranty.`,
 	// Help lists commands in this order: the order you'd use them in.
 	cobra.EnableCommandSorting = false
 	root.AddCommand(
-		startTaskCmd(a), runAgentCmd(a), dashCmd(a), watchTaskCmd(a), stopTaskCmd(a), resumeTaskCmd(a),
+		startTaskCmd(a), runAgentCmd(a), dashCmd(a), watchTaskCmd(a), stopTaskCmd(a), resumeTaskCmd(a), followUpCmd(a),
 		listTasksCmd(a), showTaskCmd(a), renameTaskCmd(a), deleteTaskCmd(a),
 		notesCmd(a), briefCmd(a), trustCmd(a), untrustCmd(a),
 		loginCmd(a), statusCmd(a), logoutCmd(a),

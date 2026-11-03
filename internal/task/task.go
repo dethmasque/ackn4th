@@ -70,6 +70,9 @@ type AgentSpec struct {
 	// Done records whether the agent declared done in its latest turn.
 	Done        bool   `json:"done"`
 	DoneSummary string `json:"done_summary,omitempty"`
+	// FollowUpsSeen is how many of the task's follow-ups the agent has
+	// been given.
+	FollowUpsSeen int `json:"follow_ups_seen,omitempty"`
 }
 
 // Task is the persisted record of one task.
@@ -101,6 +104,8 @@ type Task struct {
 	Mode string `json:"mode,omitempty"`
 	// Inbox holds messages between agents not yet delivered.
 	Inbox []Mail `json:"inbox,omitempty"`
+	// FollowUps are more work asked of the team after a run, in order.
+	FollowUps []FollowUp `json:"follow_ups,omitempty"`
 	// Todos are what the agents need from the person who gave the task.
 	Todos []Todo `json:"todos,omitempty"`
 	// Branch is the git branch the task works on (--branch), checked out

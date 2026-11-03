@@ -459,6 +459,9 @@ func (rn *run) turn(ctx context.Context, n int, input string) (agent.TurnResult,
 	}
 	s.Done, s.DoneSummary = res.Done, res.DoneSummary
 	s.Message, s.MessageRound, s.RoundDone = res.Message, t.Round, t.Round
+	// Follow-ups can't be added while the task runs, so the input had
+	// them all.
+	s.FollowUpsSeen = len(t.FollowUps)
 	return res, rn.r.Store.Save(t)
 }
 
@@ -614,6 +617,11 @@ func (rn *run) input(n int, briefing string) string {
 	}
 	if t.Note != "" {
 		fmt.Fprintf(&b, "\n# Note from the human operator\n\n%s\n", t.Note)
+	}
+	// Follow-ups go to every agent once, however its turns fall. An
+	// agent's first turn has the task above, so it gets all of them.
+	for _, f := range t.pendingFollowUps(n) {
+		fmt.Fprintf(&b, "\n# Follow-up from the person who gave the task (round %d)\n\nThe task was finished; this is more work for the team, in the same workspace. Every agent has to declare done again.\n\n%s\n", f.Round, f.Prompt)
 	}
 	if t.Started[n] && t.Solo() {
 		b.WriteString("Continue working on the task. Call declare_done once it is complete.\n")

@@ -141,12 +141,13 @@ func (a *app) dashOptions(ctx context.Context, focus string, speak *bool) (dash.
 		Stop: func(tk *task.Task) error {
 			return task.Signal(tk.PID)
 		},
-		Resume: a.resumeBackground,
-		Delete: func(tk *task.Task) error { return a.store.Delete(tk.ID) },
-		Launch: func(req dash.NewTask) (string, error) { return a.dashLaunch(ctx, req) },
-		Login:  loginCommand,
-		Setup:  a.dashSetup(),
-		Voice:  v,
+		Resume:   a.resumeBackground,
+		Delete:   func(tk *task.Task) error { return a.store.Delete(tk.ID) },
+		FollowUp: a.followUpBackground,
+		Launch:   func(req dash.NewTask) (string, error) { return a.dashLaunch(ctx, req) },
+		Login:    loginCommand,
+		Setup:    a.dashSetup(),
+		Voice:    v,
 
 		RoleAdmin: a.dashRoles(ctx),
 		Tips:      a.tips,
@@ -513,6 +514,29 @@ func tildeHome(dir string) string {
 // resumeBackground resumes a stopped task in a background runner, for the
 // dashboard, first moving its agents to prov unless that is empty. It
 // checks what resume-task would, without asking anything.
+// followUpBackground gives tk a follow-up and starts it in the
+// background, for the dashboard.
+func (a *app) followUpBackground(tk *task.Task, prompt string) error {
+	tk, err := a.store.Load(tk.ID) // the dashboard's copy is for showing
+	if err != nil {
+		return err
+	}
+	a.store.Reconcile(tk)
+	// Sign-ins first: if one is needed, the dashboard retries afterwards,
+	// and the follow-up must not have been added twice.
+	if err := a.dashSession(taskProviders(tk, nil)); err != nil {
+		return err
+	}
+	if err := tk.AddFollowUp(prompt, -1, time.Now()); err != nil {
+		return err
+	}
+	if err := a.store.Save(tk); err != nil {
+		return err
+	}
+	_, err = a.store.Spawn(tk.ID)
+	return err
+}
+
 func (a *app) resumeBackground(tk *task.Task, prov string) error {
 	tk, err := a.store.Load(tk.ID) // the dashboard's copy is for showing
 	if err != nil {

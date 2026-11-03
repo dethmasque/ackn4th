@@ -150,8 +150,10 @@ func (m *model) footer() string {
 	case m.flash != "" && time.Since(m.flashAt) < 4*time.Second:
 		return fill(" "+pAmber("▸ ")+pText(m.flash), m.w, bg0)
 	}
-	keys := [][2]string{{"↑↓", "move"}, {"tab", "panel"}, {"←→", "agent"}, {"⏎", "zoom"}, {"e", "expand"}, {"c", "copy"}, {"1-4", "tabs"}, {"[ ]", "task"}, {"f", "follow"}, {"s", "stop"}, {"r", "resume"}, {"x", "delete"}, {"n", "new"}, {"p", "providers"}, {"R", "roles"}, {"t", "tour"}, {"?", "help"}, {"q", "quit"}}
+	keys := [][2]string{{"↑↓", "move"}, {"tab", "panel"}, {"←→", "agent"}, {"⏎", "zoom"}, {"e", "expand"}, {"c", "copy"}, {"1-4", "tabs"}, {"[ ]", "task"}, {"f", "follow"}, {"s", "stop"}, {"r", "resume"}, {"a", "follow-up"}, {"x", "delete"}, {"n", "new"}, {"p", "providers"}, {"R", "roles"}, {"t", "tour"}, {"?", "help"}, {"q", "quit"}}
 	switch {
+	case m.more != nil:
+		keys = [][2]string{{"⏎", "run it"}, {"shift ⏎", "new line"}, {"esc", "cancel"}}
 	case m.open != nil && m.open.task:
 		keys = [][2]string{{"↑↓", "scroll"}, {"c", "copy it all"}, {"esc", "close"}}
 	case m.open != nil:
@@ -406,6 +408,11 @@ func (m *model) overview(l *Live, w, h int) []string {
 		prompt = append(prompt, bold(pWhite(l))+more+hint)
 	}
 	out = append(out, mark(prompt)...)
+	if n := len(t.FollowUps); n > 0 {
+		f := t.FollowUps[n-1]
+		head := fmt.Sprintf("↪ follow-up %d, round %d: ", n, f.Round)
+		out = append(out, mark([]string{fgp(cyan)(head) + pText(ansi.Truncate(oneLine(f.Prompt), w-1-width(head), "…"))})...)
+	}
 	u := t.Usage()
 	stats := pill("TURNS", bg2, lime)
 	if t.Parallel() {
@@ -422,7 +429,13 @@ func (m *model) overview(l *Live, w, h int) []string {
 		stats += pLime(fmt.Sprintf(" · ↯%d%% cached", u.CachedTokens*100/u.InputTokens))
 	}
 	out = append(out, "", stats)
-	out = append(out, pDim("in ")+pLime(t.Workspace)+pDim("  · updated "+ago(t.UpdatedAt)))
+	// Where the work is: with --repo it's a clone, not the directory the
+	// task was started from.
+	where := pDim("in ") + pLime(tildePath(t.Workspace))
+	if t.Branch != "" {
+		where += pDim(" on branch ") + pText(t.Branch)
+	}
+	out = append(out, where+pDim("  · updated "+ago(t.UpdatedAt)))
 	if t.Reason != "" && t.Status != task.Running {
 		// Up to three lines: provider errors carry the fix at the end.
 		col := pAmber
@@ -433,12 +446,12 @@ func (m *model) overview(l *Live, w, h int) []string {
 		if len(reason) > 3 {
 			reason = append(reason[:2], ansi.Truncate(reason[2], w-6, "")+" …")
 		}
-		for i, r := range reason {
+		for i, r := range markdown(reason, col) {
 			lead := "  "
 			if i == 0 {
 				lead = "▸ "
 			}
-			reason[i] = col(lead + r)
+			reason[i] = col(lead) + r
 		}
 		out = append(out, mark(reason)...)
 	}
@@ -681,6 +694,8 @@ func (m *model) eventParts(l *Live, e event.Event) (lead, what string) {
 	switch e.Kind {
 	case event.TaskStarted:
 		what = pGreen("■ task " + e.Text)
+	case event.FollowUp:
+		what = bold(fgp(cyan)("↪ follow-up ")) + pText(oneLine(e.Text))
 	case event.RoundStarted:
 		what = bold(pGreen(fmt.Sprintf("━━━ ROUND %d ━━━", e.Round)))
 	case event.TurnStarted:
@@ -692,11 +707,11 @@ func (m *model) eventParts(l *Live, e event.Event) (lead, what string) {
 	case event.ToolResult:
 		what = pRed("│  ✗ " + e.Text)
 	case event.Message:
-		what = pLime("✉ ") + pText(oneLine(e.Text))
+		what = pLime("✉ ") + mdLine(oneLine(e.Text), pText)
 	case event.Reasoning:
-		what = fgp(violet)("∴ ") + pDim(oneLine(e.Text))
+		what = fgp(violet)("∴ ") + mdLine(oneLine(e.Text), pDim)
 	case event.DoneVote:
-		what = bold(pLime("◆ declared done ")) + pDim(oneLine(e.Text))
+		what = bold(pLime("◆ declared done ")) + mdLine(oneLine(e.Text), pDim)
 	case event.TurnEnded:
 		what = pMoss("╰─ ") + pDim(fmt.Sprintf("turn ended · %s in / %s out", tokens(e.InTok), tokens(e.OutTok)))
 		if e.CacheTok > 0 && e.InTok > 0 {
@@ -801,8 +816,8 @@ func (m *model) messages(l *Live, w, h int) []string {
 		spec := l.Task.Agents[e.Agent-1]
 		pc := providerColor(spec.Provider)
 		lines = append(lines, pill(fmt.Sprintf("ROUND %d", e.Round), bg2, dim)+" "+pill(spec.Role, mix(bg1, pc, 0.25), pc)+pFaint("  "+e.Time.Local().Format("Jan 2 15:04")))
-		for _, line := range wrap(e.Text, w-4) {
-			lines = append(lines, fgp(mix(bg1, pc, 0.6))("  ┃ ")+pText(line))
+		for _, line := range markdown(wrap(clean(e.Text), w-4), pText) {
+			lines = append(lines, fgp(mix(bg1, pc, 0.6))("  ┃ ")+line)
 		}
 		lines = append(lines, "")
 	}
@@ -923,8 +938,8 @@ func (m *model) agentDetail(l *Live, w int) []string {
 	if a.Message == "" {
 		out = append(out, pDim("  none yet"))
 	}
-	for _, line := range wrap(a.Message, w-6) {
-		out = append(out, fgp(mix(bg1, pc, 0.6))("  ┃ ")+pText(line))
+	for _, line := range markdown(wrap(clean(a.Message), w-6), pText) {
+		out = append(out, fgp(mix(bg1, pc, 0.6))("  ┃ ")+line)
 	}
 	section("RECENT TOOLS")
 	if len(a.Recent) == 0 {
@@ -1078,6 +1093,7 @@ var helpRows = [][2]string{
 	{"pgup pgdn g G", "page · top · bottom (and follow)"},
 	{"f", "follow new activity on / off"},
 	{"s  r  x", "stop · resume · delete a task (each asks first)"},
+	{"a", "follow-up: more work for a finished task's team"},
 	{"n", "new task: agents, models, efforts and a prompt"},
 	{"p  R", "providers (sign in or out) · roles (add, edit, import)"},
 	{"e", "the task in full: prompt, why it stopped, to-dos"},

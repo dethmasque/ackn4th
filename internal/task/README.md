@@ -50,6 +50,11 @@ ackn4th start-task --parallel --roles backend_dev,frontend_dev,qa_engineer \
   it, and the next round's digest shows each agent its teammates' diffs.
 - **Consensus** means every agent declares done in the same round. A task
   stopped mid-round resumes only the agents that hadn't finished it.
+- **Follow-ups** (`follow-up`, or `a` in the dashboard) give a task that
+  isn't running more work. Every agent gets the follow-up once, at the
+  start of its next turn, whether the team takes turns or works at once,
+  and every agent's done vote is cleared. The follow-up gets as many
+  rounds as the task's last run allowed, unless `--rounds` says otherwise.
 
 Lines from agents working at once are tagged with the agent:
 

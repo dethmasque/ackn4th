@@ -108,6 +108,9 @@ func (m *model) focusedField() string {
 	if f, ok := m.roles.typingRole(); ok {
 		return f
 	}
+	if m.more != nil {
+		return "follow-up"
+	}
 	if m.form == nil || m.form.drop != nil {
 		return ""
 	}
@@ -217,6 +220,8 @@ func (m *model) where() string {
 		return m.whereRoles()
 	case m.setup != nil:
 		return m.whereSetup()
+	case m.more != nil:
+		return m.whereMore()
 	case m.confirm != "":
 		l := m.current()
 		if l == nil {

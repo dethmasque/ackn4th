@@ -777,6 +777,68 @@ and the task's history carry over.`,
 	return cmd
 }
 
+func followUpCmd(a *app) *cobra.Command {
+	var rounds int
+	var detach bool
+	cmd := &cobra.Command{
+		Use:     "follow-up <task> [prompt]",
+		GroupID: "tasks",
+		Aliases: []string{"followup"},
+		Short:   "Ask a finished task's team for more work",
+		Long: `Give a task that isn't running a new request, and run it again. The same
+agents continue with their conversations, the workspace and the task's
+history: every agent gets the follow-up at the start of its next turn, and
+every agent has to declare done again.
+
+It works on completed, stopped and failed tasks. Without --rounds, the
+follow-up gets as many rounds as the task's last run allowed (or runs until
+the agents agree, if that had no limit).`,
+		Example: `  ackn4th follow-up kjbk3z "Also update the Windows notes in CONTRIBUTING.md"
+  ackn4th follow-up kjbk3z "Address the review comments in REVIEW.md" --rounds 2 -d`,
+		Args: upTo(2, "<task> [prompt]"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			tk, err := a.taskArg(args, func(tk *task.Task) bool { return tk.Status != task.Running })
+			if err != nil {
+				return err
+			}
+			a.store.Reconcile(tk)
+			prompt := ""
+			if len(args) > 1 {
+				prompt = args[1]
+			}
+			if strings.TrimSpace(prompt) == "" {
+				prompt, err = a.ask(usageError{errors.New("missing the follow-up prompt")}, "what should the agents do next?", nil)
+				if err != nil {
+					return err
+				}
+			}
+			if err := a.requireSession(taskProviders(tk, nil)...); err != nil {
+				return err
+			}
+			n := -1
+			if cmd.Flags().Changed("rounds") {
+				n = rounds
+			}
+			if err := tk.AddFollowUp(prompt, n, time.Now()); err != nil {
+				return err
+			}
+			if err := a.store.Save(tk); err != nil {
+				return err
+			}
+			a.term.Banner()
+			header(a.term, tk)
+			if detach {
+				return a.detach(tk)
+			}
+			return a.runForeground(cmd.Context(), tk.ID)
+		},
+	}
+	cmd.Flags().IntVarP(&rounds, "rounds", "r", 0, "`n` rounds for the follow-up; 0 runs until the agents agree")
+	rejectNegative(cmd, "rounds")
+	cmd.Flags().BoolVarP(&detach, "detach", "d", false, "run it in the background")
+	return cmd
+}
+
 // summaryFile is the task's summary.md, if a run has written one.
 func (a *app) summaryFile(id string) string {
 	p := a.store.SummaryPath(id)

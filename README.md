@@ -66,8 +66,11 @@ Agents run on your existing plans through their CLIs (**Claude Code**,
 
 ## Install
 
-ackn4th is one binary for macOS, Linux and Windows, on Intel/AMD (amd64)
-and ARM (arm64). Every release is on the
+ackn4th is one binary for macOS and Linux, on Intel/AMD (amd64) and ARM
+(arm64). **Windows is not part of 0.1.0**: its sandbox is still being
+verified, and without a working sandbox agents can't run commands (see the
+[security model](internal/sandbox/README.md)). Windows builds will follow
+once they pass the same tests. Every release is on the
 [releases page](https://github.com/dethmasque/ackn4th/releases), with
 `checksums.txt` to verify the downloads.
 
@@ -98,20 +101,8 @@ curl -fsSLO "$url/ackn4th_linux_$arch.rpm" && sudo dnf install "./ackn4th_linux_
 curl -fsSLO "$url/ackn4th_linux_$arch.apk" && sudo apk add --allow-untrusted "./ackn4th_linux_$arch.apk"   # Alpine
 ```
 
-**Windows** (PowerShell):
-
-```powershell
-$arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
-$dir = "$env:LOCALAPPDATA\Programs\ackn4th"
-Invoke-WebRequest "https://github.com/dethmasque/ackn4th/releases/latest/download/ackn4th_windows_$arch.zip" -OutFile "$env:TEMP\ackn4th.zip"
-Expand-Archive "$env:TEMP\ackn4th.zip" $dir -Force
-[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ";$dir", 'User')
-# open a new terminal, then:
-ackn4th version
-```
-
-If you download the zip in a browser instead, run `Unblock-File` on it
-before extracting, so Windows doesn't warn about an unsigned program.
+**Windows:** no release yet. The container below is the only supported
+route, from inside WSL 2.
 
 **With Go** (1.27.3 or later), on any OS:
 
@@ -125,12 +116,9 @@ Agents' commands run in the OS's own sandbox
 - **macOS:** built in.
 - **Linux:** install [bubblewrap](https://github.com/containers/bubblewrap)
   (`apt install bubblewrap`).
-- **Windows** 10 or 11: there is no sandbox, so agents can't run commands
-  there. They still read, write and search files with ackn4th's own tools.
-  The Codex, Cursor and Copilot providers need the sandbox, so they aren't
-  available; under [WSL](https://learn.microsoft.com/windows/wsl/), ackn4th
-  works as on Linux. The examples in these docs are written for a Unix
-  shell, and `~/` means your user folder (`%USERPROFILE%`).
+- **Windows:** not released yet (an AppContainer sandbox exists in the
+  source but is unverified; builds from source refuse to run commands
+  unless it works).
 
 Optional: the [GitHub CLI](https://cli.github.com) (`gh`), for
 [GitHub issues, repositories and draft pull requests](internal/github/README.md).

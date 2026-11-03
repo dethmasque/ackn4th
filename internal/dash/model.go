@@ -32,6 +32,10 @@ type Options struct {
 	Resume func(t *task.Task, provider string) error
 	// Delete removes a task's records; nil disables it.
 	Delete func(*task.Task) error
+	// FollowUp gives a task that isn't running a new prompt and starts it
+	// again in the background; nil disables it. It may return
+	// *LoginRequired.
+	FollowUp func(t *task.Task, prompt string) error
 
 	// Launch starts a task from the new-task form in the background and
 	// returns its ID; nil hides the form. It may return *LoginRequired.
@@ -135,11 +139,12 @@ type model struct {
 	failed   string // the last action's error; shown until the next key
 	err      error
 
-	speaker   Speaker  // the voice, while on
-	entered   bool     // while speaking: a task or tab was just reached
-	voiceBusy bool     // the voice is starting
-	closed    bool     // the dashboard has quit
-	news      []string // changes to say at the next tick
+	speaker   Speaker      // the voice, while on
+	entered   bool         // while speaking: a task or tab was just reached
+	more      *followUpBox // the follow-up dialog, while open
+	voiceBusy bool         // the voice is starting
+	closed    bool         // the dashboard has quit
+	news      []string     // changes to say at the next tick
 }
 
 func newModel(opt Options) *model {
@@ -273,6 +278,9 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if _, typing := m.roles.typingRole(); typing {
 			return m, m.rolesKey(msg.String())
 		}
+		if m.more != nil {
+			return m.moreKey(msg.String())
+		}
 		if k := msg.String(); m.form == nil && m.confirm == "" && (k == "v" || k == "V") {
 			if k == "V" {
 				m.speaker.Repeat()
@@ -299,7 +307,9 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.key(msg.String())
 	case tea.PasteMsg:
-		if m.roles != nil {
+		if m.more != nil {
+			m.more.in.insert(msg.Content)
+		} else if m.roles != nil {
 			m.rolePaste(msg.Content)
 		} else if m.form != nil {
 			m.form.paste(msg.Content)
@@ -329,7 +339,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if r := m.resuming; r != nil {
 			m.resuming = nil
 			if msg.err != nil {
-				m.failed = "resume failed: sign-in didn't finish (the reason was on the sign-in screen)"
+				m.failed = "couldn't start it: sign-in didn't finish (the reason was on the sign-in screen)"
 			} else {
 				return m, m.resume(r)
 			}
@@ -416,6 +426,8 @@ func (m *model) key(k string) (tea.Model, tea.Cmd) {
 		if l != nil {
 			m.open = &detail{task: true}
 		}
+	case "a":
+		m.openFollowUp()
 	case "c", "y":
 		return m, m.copySelected()
 	case "?":
@@ -585,7 +597,7 @@ func (m *model) act(what string) tea.Cmd {
 			m.say("stopping " + l.Task.Title() + "… it saves its state and can be resumed")
 		}
 	case "resume":
-		return m.resume(&resumeReq{l.Task, m.runOn})
+		return m.resume(&resumeReq{task: l.Task, provider: m.runOn})
 	case "delete":
 		err = m.opt.Delete(l.Task)
 		if err == nil {
@@ -609,14 +621,23 @@ func (m *model) act(what string) tea.Cmd {
 type resumeReq struct {
 	task     *task.Task
 	provider string
+	followUp string // a follow-up's prompt, to start with that instead
 }
 
 // resume starts r's task again. When a provider needs a sign-in first,
 // it hands the terminal to the sign-in and retries afterwards.
 func (m *model) resume(r *resumeReq) tea.Cmd {
-	err := m.opt.Resume(r.task, r.provider)
+	var err error
+	if r.followUp != "" {
+		err = m.opt.FollowUp(r.task, r.followUp)
+	} else {
+		err = m.opt.Resume(r.task, r.provider)
+	}
 	var lr *LoginRequired
 	switch {
+	case err == nil && r.followUp != "":
+		m.say("follow-up started: " + r.task.Title() + " runs again in the background")
+		m.poll()
 	case err == nil:
 		on := ""
 		if r.provider != "" {
@@ -700,6 +721,8 @@ func (m *model) draw() string {
 		screen = m.drawSetup(lines)
 	case m.form != nil:
 		screen = m.drawForm(lines)
+	case m.more != nil:
+		screen = m.drawMore(lines)
 	case m.confirm != "" && m.current() != nil:
 		screen = m.drawConfirm(lines)
 	case m.open != nil:
