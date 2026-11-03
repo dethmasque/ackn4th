@@ -514,7 +514,7 @@ func Loopback() error {
 			}
 		}
 	}
-	return fmt.Errorf("Windows keeps sandboxed programs off localhost, which agent CLIs use to reach ackn4th: allow it once, from a terminal run as administrator: CheckNetIsolation LoopbackExempt -a -p=%s", pkg)
+	return fmt.Errorf("agent CLIs reach ackn4th over localhost, which Windows keeps sandboxed programs off: allow it once, from a terminal run as administrator: CheckNetIsolation LoopbackExempt -a -p=%s", pkg)
 }
 
 // launch runs in the launcher process: it starts argv in the AppContainer

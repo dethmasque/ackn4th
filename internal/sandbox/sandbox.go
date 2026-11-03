@@ -29,7 +29,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
 )
@@ -377,9 +376,4 @@ func (c *capped) String() string {
 		return c.head.String() + c.tail.String()
 	}
 	return fmt.Sprintf("%s\n… %d bytes of output cut …\n%s", c.head.String(), c.cut, c.tail.String())
-}
-
-// sbQuote quotes s for a Seatbelt profile string.
-func sbQuote(s string) string {
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
 }
