@@ -1,0 +1,38 @@
+# Publishes a release when a version tag is pushed: `git push origin v0.1.0`.
+# The tests run on every OS first (ci.yml); then GoReleaser builds the
+# archives and Linux packages from packaging/goreleaser.yaml and attaches
+# them, with checksums.txt, to a GitHub release for the tag.
+# packaging/README.md has the whole process.
+name: release
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: test
+    runs-on: ubuntu-26.04 # pinned image; bump deliberately
+    permissions:
+      contents: write # create the release and upload its files
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the changelog is built from the tags' history
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: GoReleaser
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: go run github.com/goreleaser/goreleaser/v2@v2.19.0 release --config packaging/goreleaser.yaml --clean

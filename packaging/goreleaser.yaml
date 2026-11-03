@@ -1,0 +1,103 @@
+# GoReleaser config: cross-compiles ackn4th and packages it for common dev
+# environments. Run it from the repository root, with --config; see
+# packaging/README.md for the release process. Try it with `just snapshot`.
+#
+# Releases are published by GitHub Actions (.github/workflows/release.yml)
+# when a v* tag is pushed, as files on the GitHub release:
+#   macOS, Linux   tar.gz archives          Windows   .zip archives
+#   Debian/Ubuntu, Fedora/RHEL, Alpine      .deb / .rpm / .apk (nfpms)
+#   checksums.txt  SHA-256 of every file
+# The workflow's GITHUB_TOKEN is all it needs. Snapshots never publish.
+version: 2
+
+project_name: ackn4th
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+    # The README's `go install` line names the version being released.
+    - >-
+      sh -c 'test "{{ .IsSnapshot }}" = true || grep -qE "cmd/ackn4th@{{ .Tag }}( |$)" README.md
+      || { echo "set the go install line in README.md to @{{ .Tag }}" >&2; exit 1; }'
+
+builds:
+  - id: ackn4th
+    main: ./cmd/ackn4th
+    binary: ackn4th
+    env:
+      - CGO_ENABLED=0 # static binaries; the keychain is reached via OS tools, not cgo
+    goos: [linux, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/dethmasque/ackn4th/internal/cli.Version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}" # reproducible builds
+  # macOS on its own, so macOS-only packaging steps apply to just these
+  # archives.
+  - id: ackn4th-macos
+    main: ./cmd/ackn4th
+    binary: ackn4th
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/dethmasque/ackn4th/internal/cli.Version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: ackn4th
+    ids: [ackn4th]
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    # No version in the name, so .../releases/latest/download/<file> is a
+    # stable link to the newest release (the README's install commands).
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    files: &files
+      - LICENSE
+      - README.md
+      - roles/*.md # also embedded in the binary; shipped as reference for custom roles
+  - id: ackn4th-macos
+    ids: [ackn4th-macos]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    files: *files
+
+nfpms:
+  - id: linux-packages
+    ids: [ackn4th]
+    package_name: ackn4th
+    file_name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    homepage: https://github.com/dethmasque/ackn4th
+    description: A hobby tool that puts a team of AI coding agents to work on a prompt until the result is ready to demo.
+    maintainer: Toni Noble <dev@tonitoned.com>
+    license: MIT
+    formats: [deb, rpm, apk]
+    bindir: /usr/bin
+    recommends:
+      - gnome-keyring # Secret Service provider for the login session
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot+{{ .ShortCommit }}"
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:", "^chore:"]
+
+# Pinned rather than read from the git remote, so `goreleaser check` and
+# snapshots work in a fresh clone, and a fork's remote can't redirect a
+# release.
+release:
+  github:
+    owner: dethmasque
+    name: ackn4th
+  prerelease: auto # tags like v0.2.0-rc.1 are marked as pre-releases

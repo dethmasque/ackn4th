@@ -1,0 +1,7 @@
+bin/
+dist/
+*.test
+.DS_Store
+*.db
+*.log
+*.tar.gz

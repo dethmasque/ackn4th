@@ -1,0 +1,7 @@
+# actionlint (run by `just lint`) checks runner labels against a list built
+# into it. ubuntu-26.04 is a GitHub-hosted image
+# (https://github.com/actions/runner-images) newer than actionlint v1.7.12's
+# list, so it is declared here. Drop it once a pinned actionlint knows it.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

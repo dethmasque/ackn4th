@@ -1,0 +1,82 @@
+#!/bin/sh
+# ackn4th-container: run ackn4th in a Linux container, from macOS or Linux with
+# Docker (or Podman: CONTAINER_ENGINE=podman).
+#
+#   ackn4th-container                 # the dashboard, for the current directory
+#   ackn4th-container login           # any ackn4th command
+#   ackn4th-container --shell [cmd]   # a shell (or a command) inside the container
+#   ackn4th-container --stop          # stop it (this ends the login)
+#   ackn4th-container --build         # (re)build the image from the repo
+#
+# The current directory is mounted at /work/<its name>, and ackn4th runs
+# there. One long-lived container serves one directory, so the login (kept
+# in memory, on a tmpfs) and background tasks survive between commands.
+# Config, task records and provider sign-ins persist in the
+# ackn4th-home volume.
+set -eu
+
+engine=${CONTAINER_ENGINE:-docker}
+image=${ACKN4TH_IMAGE:-ackn4th}
+here=$(pwd -P)
+name=$(basename "$here" | tr -c 'A-Za-z0-9_.-' '-' | sed 's/-*$//')
+hash=$(printf %s "$here" | cksum | cut -d' ' -f1)
+box="ackn4th-$name-$hash"
+work="/work/$name"
+repo=$(cd "$(dirname "$0")/.." && pwd -P)
+# A port for browser sign-ins (Claude's `ant auth login`): the host's
+# browser calls back to localhost:$port, which reaches the container. One
+# per directory, since each directory has its own container.
+port=$((20000 + hash % 20000))
+# Bump when the run flags change, so old containers are recreated.
+opts=3
+
+build() {
+	"$engine" build -t "$image" \
+		--build-arg UID="$(id -u)" --build-arg GID="$(id -g)" \
+		--build-arg VERSION="$(git -C "$repo" describe --tags --always --dirty 2>/dev/null || echo dev)" \
+		${AGENT_CLIS+--build-arg AGENT_CLIS="$AGENT_CLIS"} -f "$repo/container/Dockerfile" "$repo"
+}
+
+running() {
+	[ "$("$engine" inspect -f '{{.State.Running}} {{index .Config.Labels "ackn4th.opts"}}' "$box" 2>/dev/null)" = "true $opts" ]
+}
+
+start() {
+	"$engine" image inspect "$image" >/dev/null 2>&1 || build
+	if running; then return; fi
+	"$engine" rm -f "$box" >/dev/null 2>&1 || true
+	# bubblewrap creates namespaces for agents' commands, which the default
+	# seccomp and AppArmor profiles forbid, and mounts a fresh /proc, which
+	# the default masking of /proc paths forbids. The container keeps no
+	# capabilities and can't gain privileges.
+	unmask="systempaths=unconfined"
+	[ "$engine" = podman ] && unmask="unmask=ALL"
+	"$engine" run -d --name "$box" --init --label ackn4th.opts="$opts" \
+		--security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+		--security-opt "$unmask" --security-opt no-new-privileges --cap-drop ALL \
+		-p "127.0.0.1:$port:54546" -e ACKN4TH_OAUTH_PORT="$port" \
+		--tmpfs /run/ackn4th:mode=0700,uid="$(id -u)",gid="$(id -g)" \
+		-v ackn4th-home:/home/ackn4th \
+		-v "$here:$work" -w "$work" \
+		-e TERM="${TERM:-xterm-256color}" \
+		"$image" >/dev/null
+	echo "ackn4th: started container $box ($here → $work)" >&2
+}
+
+tty=-i
+[ -t 0 ] && [ -t 1 ] && tty=-it
+
+case "${1:-}" in
+--build) build; exit ;;
+--stop) "$engine" rm -f "$box" >/dev/null && echo "ackn4th: stopped $box" >&2; exit ;;
+--shell)
+	shift
+	start
+	if [ $# -gt 0 ]; then exec "$engine" exec $tty -w "$work" "$box" bash -c "$*"; fi
+	exec "$engine" exec $tty -w "$work" "$box" bash
+	;;
+esac
+start
+exec "$engine" exec $tty -w "$work" \
+	-e ACKN4TH_NO_INPUT -e ACKN4TH_NO_FX -e ACKN4TH_NO_TIPS -e NO_COLOR -e CI \
+	"$box" ackn4th "$@"
