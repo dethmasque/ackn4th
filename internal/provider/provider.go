@@ -45,6 +45,9 @@ type Usage struct {
 	// CachedTokens is the part of InputTokens read from the prompt cache:
 	// cheaper and faster than fresh input.
 	CachedTokens int64 `json:"cached_tokens,omitempty"`
+	// CacheWriteTokens is the part of InputTokens written to the prompt
+	// cache, which Claude bills above fresh input.
+	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
 }
 
 // Add accumulates u2 into u.
@@ -52,6 +55,7 @@ func (u *Usage) Add(u2 Usage) {
 	u.InputTokens += u2.InputTokens
 	u.OutputTokens += u2.OutputTokens
 	u.CachedTokens += u2.CachedTokens
+	u.CacheWriteTokens += u2.CacheWriteTokens
 }
 
 // System is an agent's system prompt in two parts. Shared is

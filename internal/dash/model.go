@@ -72,6 +72,8 @@ type Options struct {
 	// RoleAdmin is the roles screen (R): add, edit, import and remove
 	// roles; nil hides it.
 	RoleAdmin *Roles
+	// Settings is the configuration screen (C); nil hides it.
+	Settings *Settings
 }
 
 // Run shows the dashboard until the user quits.
@@ -135,12 +137,13 @@ type model struct {
 	help       bool
 	frame      int
 
-	form    *form      // the new-task form, while open
-	setup   *setupView // provider setup, while open
-	roles   *rolesView // the roles screen, while open
-	confirm string     // pending action: "stop" or "resume", asked in a dialog
-	no      bool       // the dialog's NO button is selected
-	runOn   string     // the resume dialog's provider; empty keeps each agent's
+	form     *form         // the new-task form, while open
+	setup    *setupView    // provider setup, while open
+	roles    *rolesView    // the roles screen, while open
+	settings *settingsView // the configuration screen, while open
+	confirm  string        // pending action: "stop" or "resume", asked in a dialog
+	no       bool          // the dialog's NO button is selected
+	runOn    string        // the resume dialog's provider; empty keeps each agent's
 	// resuming is a resume waiting on a sign-in, retried when it ends.
 	resuming *resumeReq
 	flash    string
@@ -148,13 +151,14 @@ type model struct {
 	failed   string // the last action's error; shown until the next key
 	err      error
 
-	speaker   Speaker                 // the voice, while on
-	entered   bool                    // while speaking: a task or tab was just reached
-	answered  bool                    // a voice key was answered: speak says nothing more
-	changes   map[string]*changeState // what git says of stopped tasks' workspaces
-	voiceBusy bool                    // the voice is starting
-	closed    bool                    // the dashboard has quit
-	news      []string                // changes to say at the next tick
+	speaker      Speaker                 // the voice, while on
+	entered      bool                    // while speaking: a task or tab was just reached
+	answered     bool                    // a voice key was answered: speak says nothing more
+	changes      map[string]*changeState // what git says of stopped tasks' workspaces
+	voiceBusy    bool                    // the voice is starting
+	voiceRestart bool                    // it is starting again with a new voice or rate
+	closed       bool                    // the dashboard has quit
+	news         []string                // changes to say at the next tick
 }
 
 func newModel(opt Options) *model {
@@ -269,6 +273,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.frame%pollTicks == 0 {
 			m.poll()
 		}
+		m.maybeOfferSettings()
 		return m, tea.Batch(tick(), m.maybeOfferSetup(), m.checkChanges())
 	case changesMsg:
 		m.changesChecked(msg)
@@ -295,6 +300,9 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if _, typing := m.roles.typingRole(); typing {
 			return m, m.rolesKey(msg.String())
 		}
+		if m.settingsTyping() {
+			return m, m.settingsKey(msg.String())
+		}
 		if k := msg.String(); m.form == nil && m.confirm == "" && (k == "v" || k == "V") {
 			if k == "V" {
 				if m.speaker != nil {
@@ -307,6 +315,9 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.roles != nil {
 			return m, m.rolesKey(msg.String())
+		}
+		if m.settings != nil {
+			return m, m.settingsKey(msg.String())
 		}
 		if m.setup != nil {
 			return m, m.setupKey(msg.String())
@@ -323,7 +334,9 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.key(msg.String())
 	case tea.PasteMsg:
-		if m.roles != nil {
+		if m.settingsTyping() {
+			m.settings.edit.insert(strings.TrimSpace(msg.Content))
+		} else if m.roles != nil {
 			m.rolePaste(msg.Content)
 		} else if m.form != nil {
 			m.form.paste(msg.Content)
@@ -367,7 +380,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// The NEW TASK buttons: atop the task list, or anywhere on the
 		// empty welcome panel.
-		if m.form == nil && m.confirm == "" && msg.Button == tea.MouseLeft {
+		if m.form == nil && m.confirm == "" && m.settings == nil && m.setup == nil && m.roles == nil && msg.Button == tea.MouseLeft {
 			top := len(m.hero()) + 1
 			onList := msg.X < min(36, max(28, m.w/4)) && msg.Y >= top && msg.Y <= top+1
 			if onList || len(m.tasks) == 0 {
@@ -437,6 +450,8 @@ func (m *model) key(k string) (tea.Model, tea.Cmd) {
 		return m, m.openSetup()
 	case "R":
 		m.openRoles()
+	case "C":
+		m.openSettings(false)
 	case "t":
 		m.replayTour()
 	case "e":
@@ -733,6 +748,8 @@ func (m *model) draw() string {
 	lines = append(lines, m.footer())
 	screen := strings.Join(lines, "\n")
 	switch {
+	case m.settings != nil:
+		screen = m.drawSettings(lines)
 	case m.roles != nil:
 		screen = m.drawRoles(lines)
 	case m.setup != nil:

@@ -86,10 +86,11 @@ func (t *Turn) Say(s string) {
 	t.Text.WriteString(s)
 }
 
-// Act reports the CLI's own tool use.
+// Act reports the CLI's own tool use, in full: the log keeps a line of
+// it and the details panel the rest.
 func (t *Turn) Act(tool, detail string, failed bool) {
 	if t.Stream.Activity != nil {
-		t.Stream.Activity(tool, OneLine(detail, 160), failed)
+		t.Stream.Activity(tool, detail, failed)
 	}
 }
 

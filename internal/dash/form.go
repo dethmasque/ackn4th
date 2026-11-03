@@ -26,7 +26,10 @@ type NewTask struct {
 	Repo   string
 	Branch string
 	Rounds int // 0 = until consensus
-	Agents []NewAgent
+	// MaxCost caps the task's spending in dollars; 0 = the config's
+	// spend.per_task.
+	MaxCost float64
+	Agents  []NewAgent
 }
 
 // NewAgent is one agent row of the form.
@@ -63,9 +66,12 @@ func (c Choice) label() string {
 
 // ProviderChoice describes a provider for the form.
 type ProviderChoice struct {
-	Name          string
-	Note          string
-	Models        []string // suggestions; the first is the default
+	Name   string
+	Note   string
+	Models []string // suggestions; the first is the default
+	// AutoModel, when set, is what an empty model means (openai: the
+	// newest the key can use, picked at launch); "" is then a choice.
+	AutoModel     string
 	Efforts       []string // accepted efforts, lowest first
 	DefaultEffort string
 }
@@ -74,6 +80,7 @@ type ProviderChoice struct {
 type FormDefaults struct {
 	Workspace string
 	Rounds    int
+	MaxCost   float64  // the config's spend.per_task, 0 for none
 	Provider  string   // the team's default provider
 	Roles     []string // the agent rows to start with
 }
@@ -178,6 +185,7 @@ type form struct {
 	repo      input
 	branch    input
 	rounds    input
+	cost      input // the spending cap, in dollars
 	trust     bool
 	parallel  bool
 	draftPR   bool
@@ -221,6 +229,9 @@ type loginDoneMsg struct{ err error }
 func newForm(opt *Options) *form {
 	d := opt.Defaults
 	f := &form{opt: opt, workspace: newInput(d.Workspace), rounds: newInput(strconv.Itoa(d.Rounds))}
+	if d.MaxCost > 0 {
+		f.cost = newInput(strconv.FormatFloat(d.MaxCost, 'f', -1, 64))
+	}
 	roles := d.Roles
 	if len(roles) == 0 {
 		roles = []string{"backend_dev"}
@@ -246,7 +257,7 @@ func (f *form) provider(name string) ProviderChoice {
 func (f *form) newAgent(role, provider string) agentRow {
 	p := f.provider(provider)
 	a := agentRow{role: role, provider: p.Name, effort: p.DefaultEffort}
-	if len(p.Models) > 0 {
+	if len(p.Models) > 0 && p.AutoModel == "" {
 		a.model = p.Models[0]
 	}
 	return a
@@ -302,7 +313,7 @@ func (f *form) rows() [][]field {
 	if f.untrusted() {
 		ws = append(ws, field{kind: "trust"})
 	}
-	rows = append(rows, ws, []field{{kind: "repo"}, {kind: "branch"}}, []field{{kind: "mode"}, {kind: "rounds"}, {kind: "pr"}})
+	rows = append(rows, ws, []field{{kind: "repo"}, {kind: "branch"}}, []field{{kind: "mode"}, {kind: "rounds"}, {kind: "cost"}, {kind: "pr"}})
 	for i := range f.agents {
 		rows = append(rows, []field{{"role", i}, {"provider", i}, {"model", i}, {"effort", i}, {"remove", i}})
 	}
@@ -379,6 +390,8 @@ func (f *form) text(x field) (*input, bool) {
 		return &f.branch, false
 	case "rounds":
 		return &f.rounds, false
+	case "cost":
+		return &f.cost, false
 	case "model":
 		if e := f.agents[x.agent].editModel; e != nil {
 			return e, false
@@ -410,6 +423,9 @@ func (f *form) key(k string) (cmd tea.Cmd, done bool) {
 	}
 	if in, multi := f.text(cur); in != nil {
 		if cur.kind == "rounds" && (k == "space" || len(k) == 1 && !unicode.IsDigit(rune(k[0]))) {
+			return nil, false
+		}
+		if cur.kind == "cost" && (k == "space" || len(k) == 1 && !unicode.IsDigit(rune(k[0])) && k != ".") {
 			return nil, false
 		}
 		if cur.kind == "model" && (k == "enter" || k == "tab" || k == "esc") {
@@ -519,7 +535,7 @@ func (f *form) activate(cur field) (tea.Cmd, bool) {
 		return nil, true
 	case "launch":
 		return f.launch(), false
-	case "prompt", "name", "workspace", "repo", "branch", "rounds":
+	case "prompt", "name", "workspace", "repo", "branch", "rounds", "cost":
 		f.focus++
 	}
 	return nil, false
@@ -537,9 +553,9 @@ func (f *form) paste(s string) {
 	}
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	switch {
-	case cur.kind == "rounds":
+	case cur.kind == "rounds", cur.kind == "cost":
 		s = strings.Map(func(r rune) rune {
-			if unicode.IsDigit(r) {
+			if unicode.IsDigit(r) || r == '.' && cur.kind == "cost" {
 				return r
 			}
 			return -1
@@ -571,9 +587,12 @@ func (f *form) open(x field) {
 	case "model":
 		selected = []string{a.model}
 		p := f.provider(a.provider)
+		if p.AutoModel != "" {
+			d.choices = append(d.choices, Choice{Value: "", Label: p.AutoModel, Note: "default"})
+		}
 		for i, m := range p.Models {
 			note := ""
-			if i == 0 {
+			if i == 0 && p.AutoModel == "" {
 				note = "default"
 			}
 			d.choices = append(d.choices, Choice{Value: m, Note: note})
@@ -720,6 +739,14 @@ func (f *form) request() (NewTask, error) {
 		return t, errors.New("rounds must be a number (0 runs until the agents agree)")
 	}
 	t.Rounds = n
+	if c := strings.TrimSpace(f.cost.String()); c != "" {
+		v, err := strconv.ParseFloat(c, 64)
+		if err != nil || v < 0 {
+			f.focusOn(field{kind: "cost"})
+			return t, errors.New("the spending cap is an amount in dollars, like 5 or 2.50 (empty: the configured cap)")
+		}
+		t.MaxCost = v
+	}
 	if len(f.agents) == 0 {
 		f.focusOn(field{kind: "add"})
 		return t, errors.New("add at least one agent")
@@ -934,7 +961,8 @@ func (f *form) renderSettings(add func(...string), gap func(), inner int, focuse
 	}
 	mode := onp(modeBg)(" " + radio("turns", !f.parallel) + "   " + radio("parallel", f.parallel) + " ")
 	pr := checkbox("draft PR when done", f.draftPR, focused("pr", 0))
-	left := pDim("MODE       ") + mode + pDim("     ROUNDS ") + textField(f.rounds, 6, focused("rounds", 0))
+	left := pDim("MODE       ") + mode + pDim("     ROUNDS ") + textField(f.rounds, 6, focused("rounds", 0)) +
+		pDim("   CAP $") + textField(f.cost, 7, focused("cost", 0))
 	hint := ""
 	if room := inner - width(left) - width(pr) - 2; room >= 12 {
 		hint = pDim(fit("  0 = until every agent agrees", room))
@@ -963,7 +991,7 @@ func (f *form) renderAgents(add func(...string), lines *[]string, inner int, c c
 		if a.editModel != nil {
 			modelCell = textField(*a.editModel, c.model, focused("model", i))
 		} else {
-			modelCell = dropField(a.model, c.model, text, focused("model", i), f.dropOpen("model", i))
+			modelCell = dropField(f.modelLabel(a), c.model, text, focused("model", i), f.dropOpen("model", i))
 		}
 		effort := cmpOr(a.effort, "default")
 		remove := pRed("✕")
@@ -1401,4 +1429,14 @@ func (m *model) formFooter() string {
 		b.WriteString(chip(k[0], k[1]))
 	}
 	return fill(b.String(), m.w, bg0)
+}
+
+// modelLabel is an agent row's model as shown: what an empty one means.
+func (f *form) modelLabel(a agentRow) string {
+	if a.model == "" {
+		if auto := f.provider(a.provider).AutoModel; auto != "" {
+			return auto
+		}
+	}
+	return a.model
 }

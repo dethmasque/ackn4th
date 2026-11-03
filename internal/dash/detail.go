@@ -296,18 +296,12 @@ func (m *model) detailBody(l *Live, at, inner int) (string, []string) {
 			section("RESULT", amber)
 			dim("not back yet: the tool is still running")
 		case evs[result].Error:
-			r := evs[result]
 			title += " · FAILED"
-			section("RESULT · ✗ "+r.Text, red)
-			if r.Detail != "" {
-				text(r.Detail)
-			}
+			section("RESULT · ✗ failed", red)
+			resultText(evs[result], text)
 		default:
-			r := evs[result]
-			section("RESULT · ✓ "+r.Text, green)
-			if r.Detail != "" {
-				text(r.Detail)
-			}
+			section("RESULT · ✓", green)
+			resultText(evs[result], text)
 		}
 		if call >= 0 && evs[call].Detail == "" && (result < 0 || evs[result].Detail == "") {
 			gap()
@@ -441,4 +435,16 @@ func tildePath(p string) string {
 		}
 	}
 	return p
+}
+
+// resultText writes a tool's result in full, wrapped: its summary, then
+// what the model got back when that says more.
+func resultText(r event.Event, text func(string)) {
+	sum := strings.TrimSpace(r.Text)
+	if sum != "" && !strings.HasPrefix(strings.Join(strings.Fields(r.Detail), " "), strings.TrimSuffix(sum, "…")) {
+		text(sum)
+	}
+	if r.Detail != "" {
+		text(r.Detail)
+	}
 }

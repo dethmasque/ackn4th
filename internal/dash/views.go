@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/dethmasque/ackn4th/internal/event"
+	"github.com/dethmasque/ackn4th/internal/spend"
 	"github.com/dethmasque/ackn4th/internal/task"
 )
 
@@ -150,7 +151,7 @@ func (m *model) footer() string {
 	case m.flash != "" && time.Since(m.flashAt) < 4*time.Second:
 		return fill(" "+pAmber("▸ ")+pText(m.flash), m.w, bg0)
 	}
-	keys := [][2]string{{"↑↓", "move"}, {"tab", "panel"}, {"←→", "agent"}, {"⏎", "zoom"}, {"e", "expand"}, {"c", "copy"}, {"1-4", "tabs"}, {"[ ]", "task"}, {"f", "follow"}, {"s", "stop"}, {"r", "resume"}, {"a", "follow-up"}, {"x", "delete"}, {"n", "new"}, {"p", "providers"}, {"R", "roles"}, {"t", "tour"}, {"?", "help"}, {"q", "quit"}}
+	keys := [][2]string{{"↑↓", "move"}, {"tab", "panel"}, {"←→", "agent"}, {"⏎", "zoom"}, {"e", "expand"}, {"c", "copy"}, {"1-4", "tabs"}, {"[ ]", "task"}, {"f", "follow"}, {"s", "stop"}, {"r", "resume"}, {"a", "follow-up"}, {"x", "delete"}, {"n", "new"}, {"p", "providers"}, {"R", "roles"}, {"C", "config"}, {"t", "tour"}, {"?", "help"}, {"q", "quit"}}
 	switch {
 	case m.open != nil && m.open.task:
 		keys = [][2]string{{"↑↓", "scroll"}, {"c", "copy it all"}, {"esc", "close"}}
@@ -426,6 +427,7 @@ func (m *model) overview(l *Live, w, h int) []string {
 	if u.CachedTokens > 0 && u.InputTokens > 0 {
 		stats += pLime(fmt.Sprintf(" · ↯%d%% cached", u.CachedTokens*100/u.InputTokens))
 	}
+	stats += pDim(costLabel(t.Cost(), t.MaxCost))
 	out = append(out, "", stats)
 	// Where the work is: with --repo it's a clone, not the directory the
 	// task was started from.
@@ -561,11 +563,19 @@ func (m *model) workflow(l *Live, w int) []string {
 			votes += pFaint("◇")
 		}
 	}
-	rule := "every agent in the same round"
+	n := len(t.Agents)
+	rule := fmt.Sprintf("  %d/%d declared done this round · the task completes when all %d do in one round", l.Votes(), n, n)
 	if !t.Parallel() {
-		rule = "every agent in consecutive turns"
+		rule = fmt.Sprintf("  %d/%d declared done · the task completes when all %d do, one after another", l.Votes(), n, n)
 	}
-	return append(lines, votes+pDim(fmt.Sprintf("  %d/%d declared done · completes when %s", l.Votes(), len(t.Agents), rule)))
+	if n == 1 {
+		rule = "  the task completes when the agent declares done"
+	}
+	tally := votes + pDim(rule)
+	if t.SplitRounds >= 2 {
+		tally += pAmber(fmt.Sprintf(" · split for %d rounds", t.SplitRounds))
+	}
+	return append(lines, tally)
 }
 
 const cardRows = 8
@@ -923,6 +933,7 @@ func (m *model) agentDetail(l *Live, w int) []string {
 	if u.CachedTokens > 0 && u.InputTokens > 0 {
 		usage += pLime(fmt.Sprintf(" · ↯%d%% cached", u.CachedTokens*100/u.InputTokens))
 	}
+	usage += pDim(costLabel(spec.Cost, 0))
 	out = append(out, kv("usage", usage))
 	ctx := pText(tokens(a.Context))
 	if spec.CompactAt > 0 {
@@ -1101,6 +1112,7 @@ var helpRows = [][2]string{
 	{"a", "follow-up: more work for a finished task's team"},
 	{"n", "new task: agents, models, efforts and a prompt"},
 	{"p  R", "providers (sign in or out) · roles (add, edit, import)"},
+	{"C", "configuration: spending caps, limits, models, voice"},
 	{"e", "the task in full: prompt, why it stopped, to-dos"},
 	{"c", "copy what's selected, in full"},
 	{"drag", "select text to copy it · right-click copies a line"},
@@ -1143,4 +1155,17 @@ func overlay(screen, block string, w int) string {
 		bg[y0+i] = ansi.Cut(row, 0, x0) + "\x1b[0m" + line + "\x1b[0m" + ansi.Cut(row, x0+bw, w)
 	}
 	return strings.Join(bg, "\n")
+}
+
+// costLabel is " · ≈$1.23" (of a cap, if any): estimated spending on
+// billed providers. Nothing when nothing was spent.
+func costLabel(usd, capUSD float64) string {
+	if usd <= 0 && capUSD <= 0 {
+		return ""
+	}
+	s := " · ≈" + spend.USD(usd)
+	if capUSD > 0 {
+		s += " of " + spend.USD(capUSD)
+	}
+	return s
 }

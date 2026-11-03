@@ -272,19 +272,19 @@ func TestExpiredSessionStopsMidTurn(t *testing.T) {
 	r.Authorize = func(string) error {
 		requests++
 		if requests > 1 {
-			return errors.New("session expired")
+			return errors.New("openai was signed out")
 		}
 		return nil
 	}
 	got, err := r.Run(context.Background(), tk.ID, false)
-	if err != nil || got.Status != Stopped || !strings.Contains(got.Reason, "session expired") {
+	if err != nil || got.Status != Stopped || !strings.Contains(got.Reason, "openai was signed out") {
 		t.Fatalf("status=%s reason=%q err=%v", got.Status, got.Reason, err)
 	}
 	if len(in) != 1 {
 		t.Fatalf("a request was sent after expiry: %q", in)
 	}
 
-	r.Authorize = nil // logged in again
+	r.Authorize = nil // signed in again
 	if got, err = r.Run(context.Background(), tk.ID, false); err != nil || got.Status != Completed {
 		t.Fatalf("after re-login: %s %v", got.Status, err)
 	}

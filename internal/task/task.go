@@ -55,7 +55,10 @@ type AgentSpec struct {
 	CompactAt int64  `json:"compact_at,omitempty"`
 
 	Usage provider.Usage `json:"usage"`
-	Turns int            `json:"turns"`
+	// Cost is the estimated dollars the agent has spent (billed
+	// providers only).
+	Cost  float64 `json:"cost,omitempty"`
+	Turns int     `json:"turns"`
 	// Context is how full the agent's context window was at its last request.
 	Context     int64 `json:"context_tokens,omitempty"`
 	Compactions int   `json:"compactions,omitempty"`
@@ -79,6 +82,9 @@ type AgentSpec struct {
 	// agent going in circles. See stuck.
 	SameHandoffs int `json:"same_handoffs,omitempty"`
 	Idle         int `json:"idle,omitempty"`
+	// DoneStreak counts the agent's latest turns in a row that declared
+	// done.
+	DoneStreak int `json:"done_streak,omitempty"`
 }
 
 // Task is the persisted record of one task.
@@ -93,6 +99,9 @@ type Task struct {
 	Status    Status      `json:"status"`
 	// Reason explains the current status (stop reason, error, summary).
 	Reason string `json:"reason,omitempty"`
+	// MaxCost caps the task's spending, in dollars over its whole life;
+	// 0 means the config's spend.per_task.
+	MaxCost float64 `json:"max_cost,omitempty"`
 	// MaxRounds bounds the run; 0 means until the agents agree.
 	MaxRounds int `json:"max_rounds"`
 	// Round is the current round, starting at 1.
@@ -110,6 +119,9 @@ type Task struct {
 	Mode string `json:"mode,omitempty"`
 	// Inbox holds messages between agents not yet delivered.
 	Inbox []Mail `json:"inbox,omitempty"`
+	// SplitRounds counts the latest rounds in a row in which some agents
+	// declared done and others didn't. See splitVote.
+	SplitRounds int `json:"split_rounds,omitempty"`
 	// FollowUps are more work asked of the team after a run, in order.
 	FollowUps []FollowUp `json:"follow_ups,omitempty"`
 	// Todos are what the agents need from the person who gave the task.
@@ -187,6 +199,15 @@ func (t *Task) CacheGroups() [][]int {
 		groups[j] = append(groups[j], i)
 	}
 	return groups
+}
+
+// Cost totals the agents' estimated spending, in dollars.
+func (t *Task) Cost() float64 {
+	var c float64
+	for _, a := range t.Agents {
+		c += a.Cost
+	}
+	return c
 }
 
 // Usage totals token usage across agents.

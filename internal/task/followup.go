@@ -59,7 +59,7 @@ func (t *Task) AddFollowUp(prompt string, rounds int, now time.Time) error {
 	}
 	t.FollowUps = append(t.FollowUps, FollowUp{Prompt: prompt, Round: t.Round, Time: now})
 	for i := range t.Agents {
-		t.Agents[i].Done, t.Agents[i].DoneSummary = false, ""
+		t.Agents[i].Done, t.Agents[i].DoneSummary, t.Agents[i].DoneStreak = false, "", 0
 	}
 	t.Status, t.Reason = Stopped, "a follow-up is waiting: resume the task to run it"
 	return nil

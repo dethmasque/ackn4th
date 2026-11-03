@@ -49,7 +49,7 @@ var extraWords = map[string]string{
 	"devops":    "dˈɛvˌɑps",
 	// compound would split it as fulls tack.
 	"fullstack": "fˈʊlstˌæk",
-	"backend":   "back,end",
+	"backend":   "bˈækˌɛnd",
 	"repo":      "ɹˈipO",
 	"config":    "kˈɑnfɪɡ",
 	"async":     "ˈAsˌɪŋk",

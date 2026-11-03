@@ -21,7 +21,9 @@ first run) and `V` repeats the last phrase. It names what you move to;
 `w`, `i` and `o` ask where you are, more about the selection, and what
 you can do, and `?` lists every key
 ([the dashboard's voice](../dash/README.md#the-voice)). The setting is saved as
-`voice:` in the [config](../config/README.md). To have the dashboard speak
+`voice:` in the [config](../config/README.md); the dashboard's
+configuration (`C`) turns it on or off and picks the voice and its
+speaking rate, heard at once. To have the dashboard speak
 from its very first screen without changing the setting, open it with
 `ackn4th --voice` (also `ackn4th dash --voice` and `ackn4th tour --voice`).
 

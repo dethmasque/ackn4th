@@ -1,4 +1,4 @@
-# Local A2A Automation with `ackn4th`
+# `ackn4th`: a hobbyist's alternative to A2A Automation
 
 ## `)) <==> ((`
 
@@ -30,7 +30,8 @@ Agents run on your existing plans through their CLIs (**Claude Code**,
 > result is ready to demo to you. It is not a product, a hosted service or
 > something to run in production, and it comes with no support or warranty.
 > It runs on your own accounts and API keys: what you send, what it costs and
-> following each provider's terms are up to you.
+> following each provider's terms are up to you. [Spending caps](#keeping-costs-in-check)
+> help keep that in check.
 
 ## Is it for you?
 
@@ -156,8 +157,8 @@ How to sign in to each, and how to choose models and efforts per agent:
 Agents work in the current directory. The first time they work in a
 directory, ackn4th asks you to **trust** it, since agents read it and send
 its contents to the model provider. ackn4th has no accounts of its own:
-agents run on the AI providers you sign in to, and those sign-ins last up
-to 24 hours; after that, `ackn4th login` signs you in again.
+agents run on the AI providers you sign in to, and they stay signed in
+until you run `ackn4th logout`.
 
 ```sh
 cd ~/code/my-project
@@ -166,36 +167,63 @@ ackn4th
 
 `ackn4th` on its own opens the [dashboard](internal/dash/README.md):
 
-1. **A walkthrough** shows a tooltip at a time. `t` (or `ackn4th tour`)
+1. **Configuration.** It opens first, showing how ackn4th is set up:
+   spending caps, round and tool-call limits, each provider's model and
+   effort, whether agents' commands may use the network, and the voice.
+   `↑↓` choose, `⏎` changes; each change is saved as you make it. **`C`**
+   brings it back any time.
+2. **A walkthrough** shows a tooltip at a time. `t` (or `ackn4th tour`)
    replays it whenever you like.
-2. **Set up providers.** It lists each one as ready, needing sign-in, or not
+3. **Set up providers.** It lists each one as ready, needing sign-in, or not
    installed (with the install command). Pick some with `space`, press `⏎` to
    sign in. `p` brings this back, and `x` there signs out.
-3. **Accessibility.** Press **`v`** to have the dashboard read aloud by a
+4. **Accessibility.** Press **`v`** to have the dashboard read aloud by a
    natural-sounding voice that runs on your computer
    ([details](internal/voice/README.md)). `ackn4th --voice` opens it
    speaking.
-4. **Start a task.** Press **`n`**. Write the prompt, name the task, pick
-   the workspace (or a GitHub repository and branch), then add agents: a role, 
-   provider, model and effort each. **`f1`** explains every field; **`ctrl+s`** 
-   launches it in the background.
-5. **Roles.** `R` lists the roles agents can play; add your own, edit
+5. **Start a task.** Press **`n`**. Write the prompt, name the task, pick
+   the workspace (or a GitHub repository and branch), set its rounds and
+   spending cap (**CAP $**), then add agents: a role, provider, model and
+   effort each. **`f1`** explains every field; **`ctrl+s`** launches it in
+   the background.
+6. **Roles.** `R` lists the roles agents can play; add your own, edit
    any, or import role files ([roles](roles/README.md)).
-6. **Watch.** Each agent works live. `?` lists every key. Quitting the
+7. **Watch.** Each agent works live. `?` lists every key. Quitting the
    dashboard never stops a task.
 
-A command that's missing an argument, value, or flag asks for it, unless
-running in non-interactive (`ACKN4TH_NO_INPUT`) mode. 
+Tasks run from commands too. A command that's missing an argument, value
+or flag asks for it, unless running in non-interactive
+(`ACKN4TH_NO_INPUT`) mode.
 
 ```sh
 ackn4th login                      # pick providers from a numbered list
-ackn4th start-task --name "Rate limiting" --roles backend_dev,code_reviewer "Add rate limiting to the API, with tests"
+ackn4th start-task --name "Rate limiting" --roles backend_dev,code_reviewer --max-cost 5 \
+  "Add rate limiting to the API, with tests"
 ackn4th watch-task "Rate limiting" # follow a task by name (or ID); ctrl+c detaches
 ackn4th logout --provider openai   # sign out of one provider (or all, without --provider)
 ```
 
 Every command, flag and the scripting (CI) mode:
 [internal/cli/README.md](internal/cli/README.md).
+
+## Keeping costs in check
+
+Agents on an API key (Claude, Gemini, OpenAI) cost money with every
+request; agents on your plan through a CLI (Claude Code, Codex, Cursor,
+Copilot) use its limits instead. ackn4th estimates what each request costs
+and can stop a task before it spends more than you allow:
+
+- **For one task:** the **CAP $** field in the new-task form, or
+  `start-task --max-cost 5`.
+- **For every task, a provider, a day or a month:** **`C`** in the
+  dashboard (*Spending caps*), or `spend:` in the
+  [config](internal/config/README.md).
+
+A task that reaches a cap stops, resumably, and says which cap it hit;
+`ackn4th resume-task <task> --max-cost 2` lets it spend $2 more.
+`ackn4th spend` shows today's and this month's totals, and the dashboard
+shows each task's (`≈$1.23 of $5.00`). How it works:
+[spending caps](internal/task/README.md#spending-caps).
 
 ## Documentation
 
@@ -212,6 +240,7 @@ Each topic lives next to the code it describes:
 | Security model: sign-ins, the workspace jail, OS sandboxes | [internal/sandbox/README.md](internal/sandbox/README.md) | `internal/sandbox/`, `internal/workspace/`, `internal/auth/` |
 | Roles: built-in, and adding, editing and importing your own | [roles/README.md](roles/README.md) | `roles/`, `internal/role/` |
 | Configuration and where files live | [internal/config/README.md](internal/config/README.md) | `internal/config/` |
+| Spending caps and cost estimates | [internal/task/README.md](internal/task/README.md#spending-caps) | `internal/spend/` |
 | Running in a container | [container/README.md](container/README.md) | `container/` |
 | Developing: build, test, the dev sandbox | [sandbox/README.md](sandbox/README.md) | `justfile`, `sandbox/` |
 | Packaging and releasing | [packaging/README.md](packaging/README.md) | `packaging/` |
@@ -221,10 +250,11 @@ The rest of the tree:
 ```
 cmd/ackn4th/          main package
 internal/agent/       one agent's turn loop and system prompt
-internal/auth/        OAuth grants (ant / gcloud), keychain API keys (or a tmpfs dir), the 24h sign-in limit
+internal/auth/        OAuth grants (ant / gcloud), keychain API keys (or a tmpfs dir)
 internal/notes/       shared per-project notes
 internal/onboard/     project brief, workspace snapshots, change digests with diffs
 internal/ratelimit/   shared per-key pacing from rate-limit headers
+internal/spend/       cost estimates per model, the spending ledger and its caps
 internal/tips/        first-run tips and the walkthrough (seen-state, opt-out)
 internal/tools/       agent tools (list/read/search/write/edit/delete/run_command/…)
 internal/ui/          ASCII art: banner, boxes, tables, gauges, animations

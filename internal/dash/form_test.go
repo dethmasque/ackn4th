@@ -50,9 +50,9 @@ func press(m *model, keys ...string) {
 
 func TestFormRendersEveryState(t *testing.T) {
 	var launched []NewTask
-	// prompt, name, workspace, repo, branch, mode, rounds, draft PR: then
-	// the first agent's role.
-	toRole := []string{"n", "tab", "tab", "tab", "tab", "tab", "tab", "tab", "tab"}
+	// prompt, name, workspace, repo, branch, mode, rounds, cost cap,
+	// draft PR: then the first agent's role.
+	toRole := []string{"n", "tab", "tab", "tab", "tab", "tab", "tab", "tab", "tab", "tab"}
 	for _, size := range [][2]int{{80, 22}, {120, 40}, {200, 60}} {
 		for _, keys := range [][]string{
 			{"n"},

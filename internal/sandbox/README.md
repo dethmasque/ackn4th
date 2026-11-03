@@ -15,17 +15,17 @@ it doesn't.**
 
 | Provider | Signed in with | Credential | Lifetime |
 | --- | --- | --- | --- |
-| Claude | `ant auth login --profile ackn4th` | short-lived access token, refreshed by the SDK | refresh token hard-expires server-side |
-| Gemini (default) | AI Studio API key, pasted at login | long-lived key, stored **only in the OS keychain** | used only within the 24h sign-in limit; deleted by `logout`; revoke it at AI Studio |
-| Gemini (Vertex AI) | `gcloud auth application-default login` | ~1h access token, refreshed in memory | refresh token revoked daily |
-| Claude Code | Claude Code's own login (`claude auth login`) | none held by ackn4th | Claude Code's; used only within the 24h sign-in limit |
+| Claude | `ant auth login --profile ackn4th` | short-lived access token, refreshed by the SDK | refresh token hard-expires server-side; deleted by `logout` |
+| Gemini (default) | AI Studio API key, pasted at login | long-lived key, stored **only in the OS keychain** | until `logout` deletes it; revoke it at AI Studio |
+| Gemini (Vertex AI) | `gcloud auth application-default login` | ~1h access token, refreshed in memory | refresh token revoked by `logout` |
+| Claude Code | Claude Code's own login (`claude auth login`) | none held by ackn4th | Claude Code's |
 | OpenAI | API key, pasted at login | long-lived key, stored **only in the OS keychain** | like the Gemini key; revoke it at platform.openai.com |
-| Codex, Cursor, Copilot | each CLI's own login | none held by ackn4th | the CLI's; used only within the 24h sign-in limit |
+| Codex, Cursor, Copilot | each CLI's own login | none held by ackn4th | the CLI's |
 | GitHub (optional) | `gh auth login` | none held by ackn4th | gh's |
 
 The OS keychain is the Keychain on macOS, the Credential Manager on Windows
 and the Secret Service (e.g. GNOME Keyring) on Linux. Where there is none (a
-container), keys and the session go to a private tmpfs directory instead
+container), keys go to a private tmpfs directory instead
 (`ACKN4TH_SECRETS_DIR`, which must be mode 0700), so they still never reach
 disk.
 
@@ -55,32 +55,28 @@ fewer than 5% of the window's requests or tokens are left, and makes every
 agent wait out a 429's `Retry-After` together. A parallel team slows down
 instead of failing mid-turn.
 
-## Daily deauth
+## Signing out
 
-ackn4th has no accounts of its own, but it limits how long it uses the
-providers you sign in to. `ackn4th login` records which providers are
-signed in and until when (in the OS keychain), `session_ttl` from now,
-capped at 24h. That record is checked before every model request, not only
-when a command starts. When it has expired:
+ackn4th has no accounts or sign-in of its own: a provider is usable while
+its credential is. There's no timer making you sign in again each day: it
+would only stop ackn4th, while the keys and the agent CLIs' logins stayed
+where they were, so it protected nothing.
 
-1. running tasks stop before their next request (resumable after login);
-2. the record is deleted;
-3. OAuth grants are revoked: Gemini's Vertex refresh token is revoked with
-   Google and deleted; Claude's tokens are deleted from disk. API keys
-   (Gemini, OpenAI) stay in the keychain, unusable until the next login (or
-   you'd paste them daily, which tempts people to keep them in a text file).
-   Agent CLIs keep their own logins.
+`ackn4th logout` (or `x` in the dashboard's provider list) is how you stop:
 
-The next `ackn4th login` is a fresh browser sign-in for Claude, and a quick
-check for everything else. `ackn4th logout` does the same immediately, and
-also deletes the API keys; `logout --provider p` does it for one provider.
+1. Gemini's Vertex refresh token is revoked with Google and deleted;
+   Claude's tokens are deleted from disk;
+2. the Gemini and OpenAI API keys are deleted from the keychain;
+3. running tasks stop at their next model request (resumable after you
+   sign in again): before every request ackn4th checks that the credential
+   it holds is still there.
 
-Two caveats:
-- Expiry is enforced the next time ackn4th runs, since there is no daemon.
-  Until then the grants stay on disk (owner-only files), though Claude's
-  refresh token also expires on its own.
-- Anthropic's local logout deletes the tokens; this release doesn't confirm
-  that Anthropic revokes them server-side.
+`logout --provider p` does it for one provider. Agent CLIs keep their own
+logins, which ackn4th never holds: sign out of those in the CLI itself, and
+a running task that uses one fails at its next request.
+
+One caveat: Anthropic's local logout deletes the tokens; this release
+doesn't confirm that Anthropic revokes them server-side.
 
 ## The workspace jail
 
@@ -195,9 +191,8 @@ API credits. ackn4th keeps the tools:
   can't fall back to API billing.
 
 ackn4th stores no credential for it. `ackn4th login --provider claude-code`
-only checks that Claude Code is signed in. The 24h sign-in limit still
-applies, but `ackn4th logout` leaves Claude Code signed in (use
-`claude auth logout`). It is experimental: it depends on Claude Code's
+only checks that Claude Code is signed in, and `ackn4th logout` leaves
+Claude Code signed in (use `claude auth logout`). It is experimental: it depends on Claude Code's
 `stream-json` output, and agents share your plan's usage limits. Make sure
 the way you use it fits your plan's terms.
 

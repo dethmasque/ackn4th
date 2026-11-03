@@ -28,14 +28,17 @@ while a task runs. Quitting it never stops a task.
 
 ## First run
 
-1. **The walkthrough** shows a tooltip at a time, pointing at what it
+1. **Configuration.** With no tasks yet, the dashboard opens on its
+   [configuration](#configuration), so you can see how ackn4th is set up
+   and change anything first. `esc` continues; `C` brings it back.
+2. **The walkthrough** shows a tooltip at a time, pointing at what it
    explains. `⏎` (or space, or esc) shows the next one; any other key
    dismisses it and does its usual job, so `n` still opens the form.
    `ctrl+t` turns tips off. **`t`** (or `ackn4th walkthrough`, alias
    `tour`) replays it from the start whenever you like, even with tips off.
-2. **Set up providers.** If no provider is signed in, it asks to set them
+3. **Set up providers.** If no provider is signed in, it asks to set them
    up. **LATER** skips this; `p` brings it back.
-3. **Accessibility.** The same welcome dialog offers the voice: press
+4. **Accessibility.** The same welcome dialog offers the voice: press
    **`v`** to have the dashboard read aloud. To hear it from the first
    screen, open it with `ackn4th --voice` (or `dash --voice`, `tour --voice`).
 
@@ -111,6 +114,7 @@ address after them), in handoffs, details and the activity log.
 | `n` | new task |
 | `p` | providers: see which are ready, sign in or out |
 | `R` | roles: add, edit, import or remove agent roles |
+| `C` | [configuration](#configuration): spending caps, limits, models, commands, the voice |
 | `t` | the walkthrough again, from the start |
 | `v` `V` | the voice on / off · repeat the last phrase |
 | `w` `i` `o` | with the voice on: where you are · more about what's selected · what you can do (`F2` `F3` `F4`, or `alt+` them, in forms and dialogs) |
@@ -139,8 +143,10 @@ opens the new-task form, no flags needed:
   you type. The agents' changes are made there, not in the directory
   ackn4th was started in. A branch is checked out, fetched, or created. See
   [GitHub](../github/README.md).
-- **Mode** (turns or parallel), **rounds**, and **draft PR**: open a draft
-  pull request when the task completes.
+- **Mode** (turns or parallel), **rounds**, **CAP $** (the most the task
+  may spend, estimated; it starts at `spend.per_task`, and empty uses
+  that; see [spending caps](../task/README.md#spending-caps)), and **draft
+  PR**: open a draft pull request when the task completes.
 - **Agents**, as many as you like: each row has dropdowns for the role,
   provider, model and effort. Pick several roles for one agent with space,
   or choose “type a model id…” for any model. `ctrl+n` adds a row, and `x` or
@@ -170,6 +176,31 @@ dashboard: name, title, summary, skills, writable paths and instructions
 a path or https URL, and `d` (twice) removes one of yours. Saved roles show
 up in the new-task form at once. See [roles](../../roles/README.md).
 
+## Configuration
+
+`C` opens the everyday settings of `config.yaml`, by section:
+
+| Section | Settings |
+| --- | --- |
+| General | default provider, prefer signed-in CLIs, where new workspaces go |
+| Limits | rounds per task, tool calls per turn |
+| Spending caps | each task; all of ackn4th a day and a month; claude, gemini and openai a day and a month |
+| Models | each provider's model, and effort where it has one |
+| Commands | agents run commands, commands reach the internet, longest command |
+| Dashboard | animations, tips, read aloud, the voice and its speaking rate |
+
+`↑↓` choose a setting and a line under the list says what it does. `⏎`
+or `space` turns a switch on or off, `←→` (or `⏎`) step through choices,
+and `⏎` edits a typed value (`⏎` saves it, `esc` cancels; empty means
+what the field says, such as “no cap”). Each change is checked, then
+saved on its own, keeping the file's comments and every other key
+([config](../config/README.md)). It applies at once: tasks started from
+then on use it; animations, tips and the voice change on the spot, and a
+new voice or rate is heard straight away. A value that can't be used
+(a negative cap, an effort a model doesn't have) is refused, with the
+reason. Everything else in `config.yaml`, like profiles and prices, is
+edited in the file.
+
 ## The voice
 
 With the voice on (`v`, or `ackn4th voice on`), the dashboard says little
@@ -177,7 +208,10 @@ on its own. After each key it names what you landed on, briefly: a task
 and its status, a tab, an agent and what it is doing, an event, a form
 field and its value, a dialog's question and selected button. Between
 keys it says what changed: a task finished or failed, a message flashed.
-It doesn't echo typing: a text field is read when you reach it.
+It doesn't echo typing: a text field is read when you reach it. In the
+configuration it reads each setting with its value and unit (“All of
+ackn4th, a day: 20 dollars”), and after a change, the new value and
+“Saved.”, or why it wasn't.
 
 It says things in words rather than reading the screen: an activity line
 like `12:07:05 r4 software_arch… ╰─ turn ended · 2.1k in / 812 out`
@@ -189,9 +223,9 @@ The rest is on request:
 
 | Key | Says |
 | --- | --- |
-| `w` | where you are: the screen, the task and tab, what is selected |
-| `i` | everything about what's selected, more than the screen shows: a task's round, agents, to-dos open for you, why it stopped, uncommitted changes and prompt; an agent's work and latest handoff; an event in full, how long ago, and the agent's provider and model; the handoffs; the files changed; a tip on screen |
-| `o` | what you can do there, for that task's status (`s` only while running, `r` only when it can resume) |
+| `w` | where you are: the screen, the task and tab, what is selected; in the configuration, the section and setting |
+| `i` | everything about what's selected, more than the screen shows: a task's round, agents, to-dos open for you, why it stopped, uncommitted changes and prompt; an agent's work and latest handoff; an event in full, how long ago, and the agent's provider and model; the handoffs; the files changed; a tip on screen; a setting, what it does, its choices and its key in `config.yaml` |
+| `o` | what you can do there, for that task's status (`s` only while running, `r` only when it can resume), or for the setting selected |
 | `?` | every key (the help panel, read aloud) |
 | `V` | the last phrase again |
 
@@ -215,6 +249,7 @@ state.go    each task's live state, derived from its events
 form.go     the new-task form
 setup.go    provider setup and sign-out
 roles.go    the roles screen and role editor
+settings.go the configuration screen (C)
 tour.go     the walkthrough's tooltips
 speak.go    what the voice says on its own
 voicekeys.go what it says when asked (w, i, o)

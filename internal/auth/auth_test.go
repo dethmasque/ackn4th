@@ -1,13 +1,12 @@
 package auth
 
 import (
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/zalando/go-keyring"
 
@@ -23,79 +22,46 @@ func isolate(t *testing.T) string {
 	return filepath.Join(dir, "config", "oauth")
 }
 
-func TestSessionLifecycle(t *testing.T) {
+func TestSignedIn(t *testing.T) {
 	isolate(t)
-	if _, err := Require(); !errors.Is(err, ErrNoSession) {
-		t.Fatalf("want ErrNoSession, got %v", err)
+	if Holds("claude") || SignedIn("openai") {
+		t.Fatal("nothing is stored yet")
 	}
-	if _, err := StartSession("me", []string{"claude"}, time.Hour); err != nil {
+	err := Require("claude", "openai")
+	if !errors.Is(err, ErrNotSignedIn) || !strings.Contains(err.Error(), "claude") || !strings.Contains(err.Error(), "openai") {
+		t.Fatalf("want both named, got %v", err)
+	}
+	if err := Require(); err != nil {
+		t.Fatalf("no providers needed: %v", err)
+	}
+	if err := SaveOpenAIKey("sk-proj-TESTKEY0123456789abcdefghijklmn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Require("claude"); err != nil {
-		t.Fatalf("live session rejected: %v", err)
+	if err := Require("openai"); err != nil {
+		t.Fatalf("stored key rejected: %v", err)
 	}
-	if _, err := Require("gemini"); err == nil {
-		t.Fatal("unverified provider accepted")
-	}
-	if s, err := StartSession("me", []string{"claude"}, 30*24*time.Hour); err != nil || s.ExpiresAt.Sub(s.CreatedAt) != MaxSessionTTL {
-		t.Fatalf("TTL not capped: %v %v", s, err)
-	}
-	if err := EndSession(); err != nil {
+	if err := StillHeld("openai"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Current(); !errors.Is(err, ErrNoSession) {
-		t.Fatalf("session survived EndSession: %v", err)
+	// Signing out stops running tasks at their next request.
+	if err := ForgetOpenAIKey(); err != nil {
+		t.Fatal(err)
+	}
+	if err := StillHeld("openai"); !errors.Is(err, ErrNotSignedIn) {
+		t.Fatalf("deleted key still held: %v", err)
+	}
+	// The agent CLIs keep their own logins: nothing to lose mid-task.
+	if err := StillHeld("copilot"); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestDropProvider(t *testing.T) {
+func TestOldSignInForgotten(t *testing.T) {
 	isolate(t)
-	if err := DropProvider("claude"); err != nil {
-		t.Fatalf("no session: %v", err)
-	}
-	StartSession("me", []string{"claude", "gemini"}, time.Hour)
-	if err := DropProvider("claude"); err != nil {
-		t.Fatal(err)
-	}
-	if s, err := Require("gemini"); err != nil || s.Has("claude") {
-		t.Fatalf("after dropping claude: %v %v", s, err)
-	}
-	DropProvider("gemini")
-	if _, err := Current(); !errors.Is(err, ErrNoSession) {
-		t.Fatalf("the session should end with its last provider: %v", err)
-	}
-}
-
-func TestExpiryRevokesGrants(t *testing.T) {
-	oauth := isolate(t)
-	// A Claude grant on disk, as `ant auth login` would leave it.
-	creds := filepath.Join(oauth, "anthropic", "credentials", ClaudeProfile+".json")
-	os.MkdirAll(filepath.Dir(creds), 0o700)
-	os.WriteFile(creds, []byte(`{"access_token":"x","refresh_token":"y"}`), 0o600)
-
-	expired := &Session{User: "me", CreatedAt: time.Now().Add(-25 * time.Hour), ExpiresAt: time.Now().Add(-time.Hour), Providers: []string{"claude"}}
-	data, _ := json.Marshal(expired)
-	secretSet(service, sessionKey(), string(data))
-
-	if _, err := Require(); !errors.Is(err, ErrExpired) {
-		t.Fatalf("want ErrExpired, got %v", err)
-	}
-	if _, err := Current(); !errors.Is(err, ErrNoSession) {
-		t.Fatalf("expired session was not deleted: %v", err)
-	}
-	if _, err := os.Stat(creds); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("Claude tokens survived session expiry")
-	}
-}
-
-func TestTamperedSessionRejected(t *testing.T) {
-	isolate(t)
-	// A record whose lifetime exceeds the cap was not written by StartSession.
-	forged := &Session{CreatedAt: time.Now(), ExpiresAt: time.Now().Add(365 * 24 * time.Hour)}
-	data, _ := json.Marshal(forged)
-	secretSet(service, sessionKey(), string(data))
-	if _, err := Require(); !errors.Is(err, ErrExpired) {
-		t.Fatalf("forged session accepted: %v", err)
+	secretSet(service, oldSignInKey(), `{"providers":["claude"]}`)
+	ForgetOldSignIn()
+	if _, err := secretGet(service, oldSignInKey()); !errors.Is(err, errNotFound) {
+		t.Fatalf("old record kept: %v", err)
 	}
 }
 
@@ -155,14 +121,14 @@ func TestIsolatedEnv(t *testing.T) {
 	}
 }
 
-func TestSandboxSessionIsSeparate(t *testing.T) {
+func TestSandboxKeyIsSeparate(t *testing.T) {
 	isolate(t)
-	if _, err := StartSession("me", []string{"claude"}, time.Hour); err != nil {
+	if err := SaveOpenAIKey("sk-proj-TESTKEY0123456789abcdefghijklmn"); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("ACKN4TH_HOME", t.TempDir())
-	if _, err := Current(); !errors.Is(err, ErrNoSession) {
-		t.Fatalf("sandbox sees the normal session: %v", err)
+	if HasOpenAIKey() {
+		t.Fatal("a sandbox sees the normal install's key")
 	}
 }
 
@@ -182,10 +148,8 @@ func TestGeminiKeyLifecycle(t *testing.T) {
 	if err != nil || !g.APIKey || g.Account != "AI Studio API key …klmn" {
 		t.Fatalf("grant = %+v, %v", g, err)
 	}
-	// Session expiry locks the key out but keeps it; logout deletes it.
-	RevokeAll()
-	if !HasGeminiKey() {
-		t.Fatal("session expiry deleted the key")
+	if !Holds("gemini") {
+		t.Fatal("a stored key should sign gemini in")
 	}
 	if err := ForgetGeminiKey(); err != nil || HasGeminiKey() {
 		t.Fatalf("key survived logout: %v", err)

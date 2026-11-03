@@ -13,6 +13,7 @@ var fieldTips = map[string]string{
 	"branch":    "optional, e.g. fix/rate-limit: checked out if it exists locally or on origin, else created",
 	"mode":      "turns: one agent at a time, each building on the last · parallel: all at once",
 	"rounds":    "how many rounds the team gets; 0 runs until every agent agrees it's done",
+	"cost":      "the most this task may spend, in dollars, estimated (claude, gemini, openai); empty uses the configured cap (C)",
 	"pr":        "when the task finishes, push its branch and open a draft pull request (needs gh)",
 	"role":      "what this agent does on the team; R on the dashboard adds or edits roles",
 	"provider":  "the AI service this agent runs on; p on the dashboard shows which are signed in",

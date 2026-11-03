@@ -116,7 +116,7 @@ func (p *Provider) Prewarm(ctx context.Context, system provider.System, tools []
 	u := msg.Usage
 	return provider.Usage{
 		InputTokens:  u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens,
-		CachedTokens: u.CacheReadInputTokens,
+		CachedTokens: u.CacheReadInputTokens, CacheWriteTokens: u.CacheCreationInputTokens,
 	}, nil
 }
 
@@ -221,7 +221,7 @@ func (s *session) send(ctx context.Context, user anthropic.BetaMessageParam, st 
 
 	in := msg.Usage.InputTokens + msg.Usage.CacheReadInputTokens + msg.Usage.CacheCreationInputTokens
 	reply := &provider.Reply{
-		Usage:         provider.Usage{InputTokens: in, OutputTokens: msg.Usage.OutputTokens, CachedTokens: msg.Usage.CacheReadInputTokens},
+		Usage:         provider.Usage{InputTokens: in, OutputTokens: msg.Usage.OutputTokens, CachedTokens: msg.Usage.CacheReadInputTokens, CacheWriteTokens: msg.Usage.CacheCreationInputTokens},
 		ContextTokens: in,
 	}
 	if its := msg.Usage.Iterations; len(its) > 0 {
@@ -230,7 +230,7 @@ func (s *session) send(ctx context.Context, user anthropic.BetaMessageParam, st 
 		reply.Usage = provider.Usage{}
 		for _, it := range its {
 			n := it.InputTokens + it.CacheReadInputTokens + it.CacheCreationInputTokens
-			reply.Usage.Add(provider.Usage{InputTokens: n, OutputTokens: it.OutputTokens, CachedTokens: it.CacheReadInputTokens})
+			reply.Usage.Add(provider.Usage{InputTokens: n, OutputTokens: it.OutputTokens, CachedTokens: it.CacheReadInputTokens, CacheWriteTokens: it.CacheCreationInputTokens})
 			if it.Type == "message" {
 				reply.ContextTokens = n
 			}

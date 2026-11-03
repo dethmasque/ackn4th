@@ -81,6 +81,7 @@ func (m *model) toggleVoice() tea.Cmd {
 func (m *model) voiceStarted(msg voiceMsg) {
 	m.voiceBusy = false
 	if msg.err != nil {
+		m.voiceRestart = false
 		m.failed = "the voice couldn't start: " + msg.err.Error()
 		return
 	}
@@ -107,6 +108,9 @@ type spoken struct {
 func (m *model) focusedField() string {
 	if f, ok := m.roles.typingRole(); ok {
 		return f
+	}
+	if m.settingsTyping() {
+		return "setting " + m.settings.items[m.settings.idx].Key
 	}
 	if m.form == nil || m.form.drop != nil {
 		return ""
@@ -174,6 +178,9 @@ func (m *model) speak(msg tea.Msg, before spoken) {
 	m.entered = m.place() != before.place
 	defer func() { m.entered = false }()
 	switch {
+	case isVoice(msg) && m.voiceRestart:
+		m.voiceRestart = false
+		m.speaker.Say(m.brief())
 	case isVoice(msg):
 		m.speaker.Say(voiceIntro + " " + m.brief())
 	case newFail:
@@ -214,6 +221,8 @@ func yesNo(no bool, yes, other string) string {
 // where describes the screen for someone who can't see it.
 func (m *model) where() string {
 	switch {
+	case m.settings != nil:
+		return m.whereSettings()
 	case m.roles != nil:
 		return m.whereRoles()
 	case m.setup != nil:
@@ -522,6 +531,11 @@ func (f *form) where() string {
 		return "Mode: turns."
 	case "rounds":
 		return "Rounds: " + value(&f.rounds, "until done")
+	case "cost":
+		if v := strings.TrimSpace(f.cost.String()); v != "" {
+			return "Spending cap: " + v + " dollars, estimated. Text field."
+		}
+		return "Spending cap, text field, empty: the configured cap applies, if there is one."
 	case "pr":
 		return "Open a draft pull request at the end, checkbox, " + check(f.draftPR)
 	case "role":
@@ -535,7 +549,7 @@ func (f *form) where() string {
 		if a.editModel != nil {
 			return n + ", model, text field: " + value(a.editModel, "empty")
 		}
-		return n + ", model: " + a.model + "."
+		return n + ", model: " + f.modelLabel(a) + "."
 	case "effort":
 		a, n := agent()
 		e := a.effort

@@ -138,7 +138,7 @@ var (
 	}
 	doneSpec = provider.ToolSpec{
 		Name:        DeclareDone,
-		Description: "Declare that, from your role's perspective, the whole task is complete and nothing more is needed. The task finishes only when every agent on the team declares done in consecutive turns. Do not call this if you still have concerns.",
+		Description: "Declare that, from your role's perspective, the whole task is complete and nothing more is needed. The task finishes only when every agent on the team declares done in the same round. Do not call this if something the task requires is missing; things only the person can do belong in add_user_todo and don't stop you.",
 		Schema: obj([]string{"summary"}, map[string]any{
 			"summary": str("What was delivered and how it was verified, in a few sentences."),
 		}),
@@ -672,7 +672,7 @@ func (e *Executor) Run(ctx context.Context, call provider.ToolCall) Result {
 			return fail("%v", err)
 		}
 		return Result{
-			Content: "Recorded. End your turn now with a brief closing message for your teammates.",
+			Content: "Recorded. End your turn now with a brief closing message.",
 			Summary: "done", Done: true, DoneSummary: in.Summary,
 		}
 	}

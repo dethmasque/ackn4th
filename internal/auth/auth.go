@@ -1,169 +1,109 @@
 // Package auth manages how ackn4th authenticates to model providers.
 //
-// Claude, and Gemini on Vertex AI, are reached with short-lived OAuth
-// access tokens from grants that ackn4th owns and keeps apart from your
-// everyday logins:
+// ackn4th has no accounts of its own, and no sign-in of its own: a provider
+// is usable while its credential is.
 //
 //   - Claude: an `ant auth login` profile in ackn4th's own Anthropic config
-//     dir. The SDK refreshes its short-lived access token on demand.
+//     dir. The SDK refreshes its short-lived access token on demand, and
+//     the refresh token expires server-side.
 //   - Gemini on Vertex AI: a `gcloud auth application-default login` grant
 //     in ackn4th's own gcloud config dir. Access tokens last about an hour
 //     and are refreshed in memory.
+//   - Gemini without Google Cloud, and OpenAI: an API key, the only
+//     long-lived credentials ackn4th stores: in the OS keychain, never on
+//     disk or in the environment (see SaveGeminiKey).
+//   - claude-code, codex, cursor and copilot: each CLI's own login. ackn4th
+//     holds no credential for them.
 //
-// claude-code runs Claude through the user's own Claude Code install and
-// its login; ackn4th holds no credential for it, and logging out of
-// ackn4th leaves Claude Code signed in. Like every provider, it still
-// needs a live ackn4th session.
-//
-// Gemini without Google Cloud uses an AI Studio API key, the only
-// long-lived credential ackn4th stores: in the OS keychain, never on disk
-// or in the environment (see SaveGeminiKey).
-//
-// On top of that, `ackn4th login` starts a session (recorded in the OS
-// keychain) that lasts at most 24h. Every model request checks it, and when
-// it expires ackn4th ends the session and revokes the OAuth grants, so the
-// next day starts with a fresh browser login. The API key stays in the
-// keychain but is unusable until the next login; `ackn4th logout` deletes
-// it.
+// `ackn4th logout` revokes the grants and deletes the keys. A running task
+// checks before each model request that the credential ackn4th holds is
+// still there, so signing out stops it at its next request.
 package auth
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
-	"time"
+	"sync"
 
 	"github.com/dethmasque/ackn4th/internal/config"
 )
 
-const (
-	service = "ackn4th"
-
-	// MaxSessionTTL is the longest a session may last, whatever the config
-	// says: a login is required at least daily.
-	MaxSessionTTL = 24 * time.Hour
-)
-
-// sessionKey is the session's keychain entry. A sandbox gets its own entry
-// per sandbox directory, so logging in or out of one never touches the
-// normal install's session or another clone's.
-func sessionKey() string {
-	if h, ok := config.Sandbox(); ok {
-		return "sandbox:" + h
-	}
-	return "session"
-}
+const service = "ackn4th"
 
 // Providers lists the supported agent providers.
 var Providers = []string{"claude", "gemini", "claude-code", "openai", "codex", "cursor", "copilot"}
 
-var (
-	// ErrNoSession means no provider is signed in, or all were signed out.
-	// ackn4th has no accounts of its own: the session only records which
-	// providers were signed in, and until when.
-	ErrNoSession = errors.New("no provider is signed in: run `ackn4th login` to sign in to one")
-	// ErrExpired means the session's TTL has passed.
-	ErrExpired = errors.New("provider sign-ins expired (they last 24 hours at most): run `ackn4th login` to sign in again")
-)
+// ErrNotSignedIn means a provider has no credential ackn4th can use.
+var ErrNotSignedIn = errors.New("not signed in")
 
 // ValidProvider reports whether name is a supported provider.
 func ValidProvider(name string) bool { return slices.Contains(Providers, name) }
 
-// Session records a successful login.
-type Session struct {
-	User      string    `json:"user"`
-	CreatedAt time.Time `json:"created_at"`
-	ExpiresAt time.Time `json:"expires_at"`
-	// Providers lists the providers whose grants were verified at login.
-	Providers []string `json:"providers"`
+// Holds reports whether ackn4th holds a credential for provider, without
+// network calls: an OAuth grant on disk, or an API key in the keychain.
+// The agent CLIs keep their own logins, so for them it is always false.
+func Holds(provider string) bool {
+	switch provider {
+	case "claude":
+		return HasGrant(provider)
+	case "gemini":
+		return HasGeminiKey() || HasGrant(provider)
+	case "openai":
+		return HasOpenAIKey()
+	}
+	return false
 }
 
-// Remaining is the time left before the session expires.
-func (s *Session) Remaining() time.Duration { return time.Until(s.ExpiresAt) }
-
-// Has reports whether provider was verified for this session.
-func (s *Session) Has(provider string) bool { return slices.Contains(s.Providers, provider) }
-
-// StartSession records a new session valid for ttl, capped at MaxSessionTTL.
-func StartSession(user string, providers []string, ttl time.Duration) (*Session, error) {
-	if ttl <= 0 || ttl > MaxSessionTTL {
-		ttl = MaxSessionTTL
+// SignedIn reports whether provider can be used now. For an agent CLI
+// this asks the CLI, which takes a moment.
+func SignedIn(provider string) bool {
+	switch provider {
+	case "claude", "gemini", "openai":
+		return Holds(provider)
 	}
-	now := time.Now().UTC()
-	s := &Session{User: user, CreatedAt: now, ExpiresAt: now.Add(ttl), Providers: providers}
-	data, err := json.Marshal(s)
-	if err != nil {
-		return nil, err
-	}
-	return s, secretSet(service, sessionKey(), string(data))
+	return HasGrant(provider)
 }
 
-// Current returns the stored session even if it has expired; callers that
-// need a usable session should call Require.
-func Current() (*Session, error) {
-	raw, err := secretGet(service, sessionKey())
-	if errors.Is(err, errNotFound) {
-		return nil, ErrNoSession
+// Require fails unless every provider given is signed in, checking them
+// all at once and naming each one that isn't.
+func Require(providers ...string) error {
+	errs := make([]error, len(providers))
+	var wg sync.WaitGroup
+	for i, p := range providers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if !SignedIn(p) {
+				errs[i] = fmt.Errorf("%s isn't signed in (%w): run `ackn4th login --provider %s`", p, ErrNotSignedIn, p)
+			}
+		}()
 	}
-	if err != nil {
-		return nil, err
-	}
-	var s Session
-	if err := json.Unmarshal([]byte(raw), &s); err != nil {
-		return nil, fmt.Errorf("unreadable sign-in record (run `ackn4th login`): %w", err)
-	}
-	return &s, nil
+	wg.Wait()
+	return errors.Join(errs...)
 }
 
-// Require returns the live session, or ErrNoSession / ErrExpired. When
-// providers are given, each must have been verified at login. The moment an
-// expired session is seen it is deleted and every provider grant is revoked.
-func Require(providers ...string) (*Session, error) {
-	s, err := Current()
-	if err != nil {
-		return nil, err
-	}
-	if !time.Now().Before(s.ExpiresAt) || s.ExpiresAt.Sub(s.CreatedAt) > MaxSessionTTL {
-		EndSession()
-		RevokeAll()
-		return nil, ErrExpired
-	}
-	for _, p := range providers {
-		if !s.Has(p) {
-			return nil, fmt.Errorf("%s isn't signed in: run `ackn4th login --provider %s`", p, p)
+// StillHeld is checked before every model request: it fails once the
+// credential ackn4th held for provider is gone, so `ackn4th logout`
+// stops running tasks. An agent CLI fails by itself when its own login
+// ends, so for one it always passes.
+func StillHeld(provider string) error {
+	switch provider {
+	case "claude", "gemini", "openai":
+		if !Holds(provider) {
+			return fmt.Errorf("%s was signed out (%w): run `ackn4th login --provider %s`, then resume the task", provider, ErrNotSignedIn, provider)
 		}
 	}
-	return s, nil
+	return nil
 }
 
-// DropProvider removes provider from the session, so tasks can't use it
-// until it is logged in again. The session ends with its last provider.
-// Without a session there is nothing to drop.
-func DropProvider(provider string) error {
-	s, err := Current()
-	if errors.Is(err, ErrNoSession) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	s.Providers = slices.DeleteFunc(s.Providers, func(p string) bool { return p == provider })
-	if len(s.Providers) == 0 {
-		return EndSession()
-	}
-	data, err := json.Marshal(s)
-	if err != nil {
-		return err
-	}
-	return secretSet(service, sessionKey(), string(data))
-}
+// ForgetOldSignIn deletes the record older versions kept of which
+// providers were signed in and until when, if it is still there.
+func ForgetOldSignIn() { secretDelete(service, oldSignInKey()) }
 
-// EndSession deletes the session. Ending a missing session is not an error.
-func EndSession() error {
-	err := secretDelete(service, sessionKey())
-	if errors.Is(err, errNotFound) {
-		return nil
+func oldSignInKey() string {
+	if h, ok := config.Sandbox(); ok {
+		return "sandbox:" + h
 	}
-	return err
+	return "session"
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dethmasque/ackn4th/internal/event"
+	"github.com/dethmasque/ackn4th/internal/spend"
 	"github.com/dethmasque/ackn4th/internal/task"
 	"github.com/dethmasque/ackn4th/internal/ui"
 )
@@ -378,6 +379,9 @@ func cached(hit, in int64) string {
 func outcome(t *ui.Term, tk *task.Task, started time.Time, summary string) {
 	u := tk.Usage()
 	stats := t.Gray(fmt.Sprintf("round %d · %s in / %s out", tk.Round, ui.Tokens(u.InputTokens), ui.Tokens(u.OutputTokens)) + cached(u.CachedTokens, u.InputTokens))
+	if c := tk.Cost(); c > 0 {
+		stats += t.Gray(" · ≈" + spend.USD(c))
+	}
 	if !started.IsZero() {
 		stats += t.Gray(" · " + ui.Duration(time.Since(started).Round(time.Second)))
 	}

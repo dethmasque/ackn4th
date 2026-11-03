@@ -413,8 +413,8 @@ func Login(ctx context.Context, provider, gcpProject string, in io.Reader, out i
 func Revoke(provider string) error {
 	switch provider {
 	case claudecode.Name, "openai", clis.CodexName, clis.CursorName, clis.CopilotName:
-		// The OpenAI key is kept like the Gemini key: unusable without a
-		// session, deleted by logout.
+		// Nothing to revoke: the OpenAI key is deleted by logout, and the
+		// CLIs keep their own logins.
 		return nil
 	case "claude":
 		dir, err := anthropicDir()
@@ -447,17 +447,4 @@ func Revoke(provider string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown provider %q", provider)
-}
-
-// RevokeAll revokes every provider's OAuth grant, returning the first
-// error. A stored Gemini API key is kept (it is unusable without a
-// session); `ackn4th logout` deletes it too.
-func RevokeAll() error {
-	var first error
-	for _, p := range Providers {
-		if err := Revoke(p); err != nil && first == nil {
-			first = err
-		}
-	}
-	return first
 }

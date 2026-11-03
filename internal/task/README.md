@@ -48,8 +48,23 @@ ackn4th start-task --parallel --roles backend_dev,frontend_dev,qa_engineer \
   tasks too.
 - **Credit and catch-up.** Every change is credited to the agent that made
   it, and the next round's digest shows each agent its teammates' diffs.
-- **Consensus** means every agent declares done in the same round. A task
-  stopped mid-round resumes only the agents that hadn't finished it.
+- **Consensus** means every agent declares done in the same round: a vote
+  counts for the round it was made in, and in turn-taking tasks any agent
+  that ends its turn without declaring done clears the votes before it.
+  Open to-dos for you don't block it. A task stopped mid-round resumes
+  only the agents that hadn't finished it.
+- **Staying on task.** Every turn after an agent's first starts with the
+  task again (up to 2,000 characters, and the latest follow-up the agent
+  has had), so it stays in view on long runs and survives compaction.
+- **Failing tool calls.** After 5 tool calls in a row fail (a path the
+  role may not change, a stale edit, bad arguments), the agent is told to
+  stop and read the errors, and to work on something else, ask a teammate
+  or record a blocker with `add_user_todo` instead of retrying. After 10,
+  it is asked to hand off and say what blocks it. Commands that exit
+  non-zero don't count (`grep` with no match does that).
+- **Done over a failure.** Declaring done right after a failed command
+  gets the agent told so: fix it, or say in the closing message why the
+  failure is expected.
 - **Going in circles.** Within a turn, a repeat of a lookup the agent
   already made (`list_dir`, `read_file`, `search_files`, `run_command`
   with the same input), with no file changed by it since, isn't run: the
@@ -60,6 +75,15 @@ ackn4th start-task --parallel --roles backend_dev,frontend_dev,qa_engineer \
   reason names the agent and suggests resuming it on another model or
   provider, or a follow-up; resuming gives it a fresh start. Done votes
   don't count: an agent waiting on teammates may say so every turn.
+- **A split team.** A team can split for good: some agents declare done
+  every round while the others keep polishing work that already meets the
+  task (one team went 25 rounds that way). Agents in a parallel task are
+  told who declared done in the round before, since votes clear between
+  rounds. After 2 rounds in a row with some votes but not all, the
+  holdouts are told so, and that what only you can do (a check in a
+  browser, a credential) belongs in a to-do for you, which doesn't stop
+  them declaring done. After 5, the task stops and says who voted and who
+  kept working; the dashboard flags the split from round 2.
 - **Follow-ups** (`follow-up`, or `a` in the dashboard) give a task that
   isn't running more work. Every agent gets the follow-up once, at the
   start of its next turn, whether the team takes turns or works at once,
@@ -152,6 +176,40 @@ dir, keyed by workspace, never in the project. Read them with
 `ackn4th notes [dir]`, or seed them before the first task with
 `ackn4th notes --edit`: a few lines on how to build and test save every
 agent the discovery. An `AGENTS.md` in the project is quoted in every brief.
+
+## Spending caps
+
+A runaway agent costs money, so ackn4th can cap what agents spend on the
+providers that bill per token (claude, gemini, openai). Agent CLIs on your
+own plan (claude-code, codex, cursor, copilot) cost nothing here: their
+plans have usage limits of their own. Set caps under `spend:` in the
+[config](../config/README.md); none are set by default.
+
+- **Per task** (`spend.per_task`, or `start-task --max-cost`), over the
+  task's whole life: its resumes and follow-ups too.
+- **Per provider** (`spend.providers.<name>.daily` / `.monthly`) and **for
+  all of ackn4th** (`spend.daily` / `spend.monthly`), over every task,
+  in your local time.
+
+Every model request is checked first: once a cap is reached, the agent's
+turn ends without sending, and the task stops (resumably) saying which cap
+it hit. A request already sent can take spending a little past a cap.
+`resume-task --max-cost 2` (or `follow-up --max-cost 2`) lets a task spend
+$2 more; a daily or monthly cap waits for the next day or month, or a
+higher cap.
+
+Costs are **estimates**, from the token counts each provider reports and
+its prices per million tokens: fresh input, input read from the cache,
+input written to it (Claude) and output. Long-prompt prices apply where a
+model has them. ackn4th knows the prices of the default models; give any
+other's under `spend.prices`. Under a cap, an agent whose model has no
+known price doesn't start, since the cap couldn't be kept. The providers'
+own bills are the final word.
+
+Spending is recorded in `<data>/spend/<year-month>.jsonl`, one line per
+request, by every runner, foreground and background. `ackn4th spend`
+totals today and this month beside the caps; `list-tasks`, the outcome
+card and the dashboard show each task's estimate (`≈$1.23 of $5.00`).
 
 ## When a task ends
 

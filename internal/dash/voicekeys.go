@@ -43,7 +43,7 @@ func (m *model) voiceKey(k string) bool {
 	case "alt+o", "f4":
 		ask = "o"
 	case "w", "i", "o":
-		if m.roles != nil || m.setup != nil || m.form != nil || m.confirm != "" {
+		if m.roles != nil || m.setup != nil || m.settings != nil || m.form != nil || m.confirm != "" {
 			return false // letters mean something there
 		}
 		ask = k
@@ -66,6 +66,8 @@ func (m *model) voiceKey(k string) bool {
 // on, in a few words.
 func (m *model) brief() string {
 	switch {
+	case m.settings != nil:
+		return m.briefSettings()
 	case m.roles != nil:
 		return m.briefRoles()
 	case m.setup != nil:
@@ -197,6 +199,8 @@ func (m *model) confirmQuestion() string {
 // whereAmI is the w key: the screen, and where on it you are.
 func (m *model) whereAmI() string {
 	switch {
+	case m.settings != nil:
+		return m.whereSettings()
 	case m.roles != nil:
 		return "The roles dialog. " + m.briefRoles()
 	case m.setup != nil:
@@ -239,6 +243,9 @@ func (m *model) about() string {
 }
 
 func (m *model) aboutSelected() string {
+	if m.settings != nil {
+		return m.aboutSettings()
+	}
 	if m.roles != nil || m.setup != nil || m.confirm != "" || m.help || m.form != nil || m.open != nil {
 		return m.where()
 	}
@@ -279,6 +286,8 @@ func (m *model) aboutSelected() string {
 // options is the o key: what you can do here.
 func (m *model) options() string {
 	switch {
+	case m.settings != nil:
+		return m.settingsOptions()
 	case m.roles != nil:
 		if m.roles.edit != nil || m.roles.imp != nil {
 			return "Type to edit. Tab and shift tab move between fields. Control s saves. Escape cancels."
