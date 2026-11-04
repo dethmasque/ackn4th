@@ -81,12 +81,17 @@ ackn4th run-agent --role code_reviewer --profile deep-review "Review internal/au
 Models reason before they act, as much as `effort` allows: they decide how
 much each step needs. Claude (API and Claude Code), Gemini, Codex, Cursor
 and Copilot send a summary of that reasoning, which the dashboard shows
-live and keeps in each task's log. OpenAI's API doesn't share it.
+live and keeps in each task's log. The OpenAI provider doesn't show it.
 
 OpenAI has no default model: `ackn4th login --provider openai` (or setup in
 the dashboard) tries the configured one and, if your key can't use it, picks
 the newest chat model that answers a test request and saves it to the
-config.
+config. If none does, the error gives OpenAI's reason for each model tried.
+
+The OpenAI provider uses the Responses API with storage off, so OpenAI
+keeps no conversation. The model's reasoning comes back encrypted, is saved
+with the task, and goes back with the next request, so it carries across
+tool calls and resumes.
 
 Before a task starts, ackn4th checks each distinct model with a real API
 call, so a typo fails right away instead of halfway through. A task keeps
@@ -102,7 +107,7 @@ provider, e.g. when API credits run out.
 provider.go    the provider-neutral interface every adapter implements
 claude/        Anthropic API (Messages, prompt caching, server-side compaction)
 gemini/        Gemini API (AI Studio key or Vertex AI)
-openai/        OpenAI API (model probing: PickModel)
+openai/        OpenAI Responses API (stateless; model probing: PickModel)
 claudecode/    local Claude Code as the model loop, with its own tools off
 cliagent/      Codex, Cursor and Copilot, run inside the OS sandbox
 clis/          the agent CLIs' install checks and sign-in commands
