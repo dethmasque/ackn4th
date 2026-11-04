@@ -6,13 +6,13 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestLoadLayersOverDefaults(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(HomeEnv, dir)
 	os.MkdirAll(filepath.Join(dir, "config"), 0o700)
+	// session_ttl is gone: a file that still has it loads.
 	os.WriteFile(filepath.Join(dir, "config", "config.yaml"), []byte(
 		"session_ttl: 8h\neffects: false\nproviders:\n  claude:\n    model: claude-sonnet-5-5\n"), 0o600)
 
@@ -20,7 +20,7 @@ func TestLoadLayersOverDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SessionTTL != 8*time.Hour || cfg.Effects {
+	if cfg.Effects {
 		t.Errorf("file values not applied: %+v", cfg)
 	}
 	c := cfg.Providers["claude"]
@@ -35,7 +35,7 @@ func TestLoadLayersOverDefaults(t *testing.T) {
 func TestMissingFileGivesDefaults(t *testing.T) {
 	t.Setenv(HomeEnv, t.TempDir())
 	cfg, err := Load()
-	if err != nil || cfg.SessionTTL != 24*time.Hour || !cfg.Effects {
+	if err != nil || !cfg.Effects {
 		t.Fatalf("cfg=%+v err=%v", cfg, err)
 	}
 }

@@ -20,6 +20,23 @@ import (
 // prompt links to go into the brief, --repo clones with gh's credentials,
 // and --draft-pr (or open-pr) proposes the agents' changes.
 
+// repoDir is where --repo works on repo: its clone in the default
+// workspace root, and whether one is there already. It changes nothing,
+// so the new-task form can show it as you type.
+func (a *app) repoDir(repo string) (dir string, exists bool, err error) {
+	_, name, err := github.ParseRepo(repo)
+	if err != nil {
+		return "", false, err
+	}
+	allowed, err := a.cfg.AllowedRoots()
+	if err != nil {
+		return "", false, err
+	}
+	dir = filepath.Join(allowed[0], name)
+	_, err = os.Stat(filepath.Join(dir, ".git"))
+	return dir, err == nil, nil
+}
+
 // repoWorkspace clones owner/name into the default workspace root, or
 // reuses an existing clone there, and returns it.
 func (a *app) repoWorkspace(ctx context.Context, repo string, allowed []string, quiet bool) (string, error) {

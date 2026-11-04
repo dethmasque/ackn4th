@@ -12,6 +12,7 @@ import (
 	"github.com/dethmasque/ackn4th/internal/event"
 	"github.com/dethmasque/ackn4th/internal/provider"
 	"github.com/dethmasque/ackn4th/internal/role"
+	"github.com/dethmasque/ackn4th/internal/spend"
 	"github.com/dethmasque/ackn4th/internal/tools"
 )
 
@@ -31,6 +32,9 @@ type Runner struct {
 	// task stops (resumably) instead of continuing on stale credentials.
 	// It gets the agent's provider.
 	Authorize func(provider string) error
+	// Spend prices model requests, records them in the shared ledger and
+	// enforces the spending caps. Nil records and caps nothing.
+	Spend *spend.Policy
 	// Sink receives every event, including streamed text, for live display.
 	Sink event.Sink
 	// Commands lets agents run sandboxed shell commands; nil disallows
@@ -76,6 +80,11 @@ func (r *Runner) Run(ctx context.Context, id string, background bool) (*Task, er
 	}
 	resumed := t.Status != Pending
 	t.Status, t.Reason, t.PID, t.Background = Running, "", os.Getpid(), background
+	// Someone started it again: a stuck agent gets a fresh chance.
+	for i := range t.Agents {
+		t.Agents[i].SameHandoffs, t.Agents[i].Idle = 0, 0
+	}
+	t.SplitRounds = 0
 	if err := r.Store.Save(t); err != nil {
 		return t, err
 	}
@@ -84,6 +93,9 @@ func (r *Runner) Run(ctx context.Context, id string, background bool) (*Task, er
 		how = "resume"
 	}
 	r.emit(t, event.Event{Kind: event.TaskStarted, Text: how})
+	if t.FollowUpPending() {
+		r.emit(t, event.Event{Kind: event.FollowUp, Text: t.FollowUps[len(t.FollowUps)-1].Prompt})
+	}
 
 	var runErr error
 	if rn, err := r.setup(t); err != nil {
@@ -105,6 +117,14 @@ func (r *Runner) Run(ctx context.Context, id string, background bool) (*Task, er
 	case errors.As(runErr, new(unauthorized)):
 		t.Status = Stopped
 		t.Reason = runErr.Error() + "; once signed in again, resume the task"
+		r.emit(t, event.Event{Kind: event.TaskStopped, Text: t.Reason})
+	case errors.As(runErr, new(*spend.OverError)):
+		t.Status = Stopped
+		t.Reason = runErr.Error()
+		r.emit(t, event.Event{Kind: event.TaskStopped, Text: t.Reason})
+	case errors.As(runErr, new(*StuckError)):
+		t.Status = Stopped
+		t.Reason = runErr.Error()
 		r.emit(t, event.Event{Kind: event.TaskStopped, Text: t.Reason})
 	case errors.Is(runErr, ErrRoundLimit):
 		t.Status = Stopped

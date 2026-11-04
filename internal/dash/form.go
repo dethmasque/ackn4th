@@ -26,7 +26,10 @@ type NewTask struct {
 	Repo   string
 	Branch string
 	Rounds int // 0 = until consensus
-	Agents []NewAgent
+	// MaxCost caps the task's spending in dollars; 0 = the config's
+	// spend.per_task.
+	MaxCost float64
+	Agents  []NewAgent
 }
 
 // NewAgent is one agent row of the form.
@@ -63,9 +66,12 @@ func (c Choice) label() string {
 
 // ProviderChoice describes a provider for the form.
 type ProviderChoice struct {
-	Name          string
-	Note          string
-	Models        []string // suggestions; the first is the default
+	Name   string
+	Note   string
+	Models []string // suggestions; the first is the default
+	// AutoModel, when set, is what an empty model means (openai: the
+	// newest the key can use, picked at launch); "" is then a choice.
+	AutoModel     string
 	Efforts       []string // accepted efforts, lowest first
 	DefaultEffort string
 }
@@ -74,6 +80,7 @@ type ProviderChoice struct {
 type FormDefaults struct {
 	Workspace string
 	Rounds    int
+	MaxCost   float64  // the config's spend.per_task, 0 for none
 	Provider  string   // the team's default provider
 	Roles     []string // the agent rows to start with
 }
@@ -178,6 +185,7 @@ type form struct {
 	repo      input
 	branch    input
 	rounds    input
+	cost      input // the spending cap, in dollars
 	trust     bool
 	parallel  bool
 	draftPR   bool
@@ -193,6 +201,22 @@ type form struct {
 	// where the form was drawn: the walkthrough's tooltip points there.
 	belowAgents, x, y int
 	promptW           int // the prompt editor's width when last drawn
+	// team is set when the form is a follow-up for that task: a prompt,
+	// and its agents' roles, models and efforts. Providers stay, and
+	// agents can't be added or removed (their conversations are theirs).
+	team *task.Task
+}
+
+// followUp is what the form sends in follow-up mode.
+type followUpMsg struct{ r *resumeReq }
+
+// newFollowUpForm is the form for a follow-up to t.
+func newFollowUpForm(opt *Options, t *task.Task) *form {
+	f := &form{opt: opt, team: t}
+	for _, a := range t.Agents {
+		f.agents = append(f.agents, agentRow{role: a.Role, provider: a.Provider, model: a.Model, effort: a.Effort})
+	}
+	return f
 }
 
 type launchedMsg struct {
@@ -205,6 +229,9 @@ type loginDoneMsg struct{ err error }
 func newForm(opt *Options) *form {
 	d := opt.Defaults
 	f := &form{opt: opt, workspace: newInput(d.Workspace), rounds: newInput(strconv.Itoa(d.Rounds))}
+	if d.MaxCost > 0 {
+		f.cost = newInput(strconv.FormatFloat(d.MaxCost, 'f', -1, 64))
+	}
 	roles := d.Roles
 	if len(roles) == 0 {
 		roles = []string{"backend_dev"}
@@ -230,10 +257,37 @@ func (f *form) provider(name string) ProviderChoice {
 func (f *form) newAgent(role, provider string) agentRow {
 	p := f.provider(provider)
 	a := agentRow{role: role, provider: p.Name, effort: p.DefaultEffort}
-	if len(p.Models) > 0 {
+	if len(p.Models) > 0 && p.AutoModel == "" {
 		a.model = p.Models[0]
 	}
 	return a
+}
+
+// repoWhere says where a task for repo will work, in w cells.
+func (f *form) repoWhere(repo string, w int) string {
+	// The workspace field beside this isn't used with a repo: say so, and
+	// where the agents will work instead.
+	if f.opt.RepoDir == nil {
+		return pDim(fit("← not used: the repo is cloned instead", w))
+	}
+	dir, exists, err := f.opt.RepoDir(repo)
+	if err != nil {
+		return pAmber(ansi.Truncate("✗ "+repoHint(err), w, "…"))
+	}
+	head := "← not used; clones to "
+	if exists {
+		head = "← not used; reuses the clone "
+	}
+	path := tildePath(dir)
+	return pDim(head) + pLime(ansi.TruncateLeft(path, max(0, width(path)-(w-width(head))), "…"))
+}
+
+// repoHint is a repo error, short: the form shows it beside the field.
+func repoHint(err error) string {
+	if strings.Contains(err.Error(), "isn't a repository") {
+		return "use owner/name or a github.com URL"
+	}
+	return err.Error()
 }
 
 // untrusted reports whether the workspace needs trusting first; a GitHub
@@ -247,12 +301,19 @@ func (f *form) untrusted() bool {
 
 // fields lists the controls in tab order, row by row.
 func (f *form) rows() [][]field {
+	if f.team != nil {
+		rows := [][]field{{{kind: "prompt"}}}
+		for i := range f.agents {
+			rows = append(rows, []field{{"role", i}, {"model", i}, {"effort", i}})
+		}
+		return append(rows, []field{{kind: "cancel"}, {kind: "launch"}})
+	}
 	rows := [][]field{{{kind: "prompt"}}, {{kind: "name"}}}
 	ws := []field{{kind: "workspace"}}
 	if f.untrusted() {
 		ws = append(ws, field{kind: "trust"})
 	}
-	rows = append(rows, ws, []field{{kind: "repo"}, {kind: "branch"}}, []field{{kind: "mode"}, {kind: "rounds"}, {kind: "pr"}})
+	rows = append(rows, ws, []field{{kind: "repo"}, {kind: "branch"}}, []field{{kind: "mode"}, {kind: "rounds"}, {kind: "cost"}, {kind: "pr"}})
 	for i := range f.agents {
 		rows = append(rows, []field{{"role", i}, {"provider", i}, {"model", i}, {"effort", i}, {"remove", i}})
 	}
@@ -329,6 +390,8 @@ func (f *form) text(x field) (*input, bool) {
 		return &f.branch, false
 	case "rounds":
 		return &f.rounds, false
+	case "cost":
+		return &f.cost, false
 	case "model":
 		if e := f.agents[x.agent].editModel; e != nil {
 			return e, false
@@ -362,6 +425,9 @@ func (f *form) key(k string) (cmd tea.Cmd, done bool) {
 		if cur.kind == "rounds" && (k == "space" || len(k) == 1 && !unicode.IsDigit(rune(k[0]))) {
 			return nil, false
 		}
+		if cur.kind == "cost" && (k == "space" || len(k) == 1 && !unicode.IsDigit(rune(k[0])) && k != ".") {
+			return nil, false
+		}
 		if cur.kind == "model" && (k == "enter" || k == "tab" || k == "esc") {
 			a := &f.agents[cur.agent]
 			if v := strings.TrimSpace(a.editModel.String()); v != "" && k != "esc" {
@@ -375,6 +441,9 @@ func (f *form) key(k string) (cmd tea.Cmd, done bool) {
 		}
 		if in.edit(k, multi) {
 			f.err = ""
+			// Typing a repo hides the trust checkbox above it (a repo
+			// needs no trusting), which would move focus off the field.
+			f.focusOn(cur)
 			return nil, false
 		}
 	}
@@ -398,9 +467,11 @@ func (f *form) key(k string) (cmd tea.Cmd, done bool) {
 	case "ctrl+s":
 		return f.launch(), false
 	case "ctrl+n":
-		f.addAgent()
-	case "ctrl+x", "delete", "backspace":
-		if isAgentField(cur.kind) {
+		if f.team == nil {
+			f.addAgent()
+		}
+	case "x", "ctrl+x", "delete", "backspace":
+		if isAgentField(cur.kind) && f.team == nil {
 			f.removeAgent(cur.agent)
 		}
 	case "ctrl+l":
@@ -464,7 +535,7 @@ func (f *form) activate(cur field) (tea.Cmd, bool) {
 		return nil, true
 	case "launch":
 		return f.launch(), false
-	case "prompt", "name", "workspace", "repo", "branch", "rounds":
+	case "prompt", "name", "workspace", "repo", "branch", "rounds", "cost":
 		f.focus++
 	}
 	return nil, false
@@ -482,9 +553,9 @@ func (f *form) paste(s string) {
 	}
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	switch {
-	case cur.kind == "rounds":
+	case cur.kind == "rounds", cur.kind == "cost":
 		s = strings.Map(func(r rune) rune {
-			if unicode.IsDigit(r) {
+			if unicode.IsDigit(r) || r == '.' && cur.kind == "cost" {
 				return r
 			}
 			return -1
@@ -494,6 +565,7 @@ func (f *form) paste(s string) {
 	}
 	in.insert(s)
 	f.err = ""
+	f.focusOn(cur)
 }
 
 // open shows the dropdown for an agent field.
@@ -515,9 +587,12 @@ func (f *form) open(x field) {
 	case "model":
 		selected = []string{a.model}
 		p := f.provider(a.provider)
+		if p.AutoModel != "" {
+			d.choices = append(d.choices, Choice{Value: "", Label: p.AutoModel, Note: "default"})
+		}
 		for i, m := range p.Models {
 			note := ""
-			if i == 0 {
+			if i == 0 && p.AutoModel == "" {
 				note = "default"
 			}
 			d.choices = append(d.choices, Choice{Value: m, Note: note})
@@ -664,6 +739,14 @@ func (f *form) request() (NewTask, error) {
 		return t, errors.New("rounds must be a number (0 runs until the agents agree)")
 	}
 	t.Rounds = n
+	if c := strings.TrimSpace(f.cost.String()); c != "" {
+		v, err := strconv.ParseFloat(c, 64)
+		if err != nil || v < 0 {
+			f.focusOn(field{kind: "cost"})
+			return t, errors.New("the spending cap is an amount in dollars, like 5 or 2.50 (empty: the configured cap)")
+		}
+		t.MaxCost = v
+	}
 	if len(f.agents) == 0 {
 		f.focusOn(field{kind: "add"})
 		return t, errors.New("add at least one agent")
@@ -678,6 +761,9 @@ func (f *form) request() (NewTask, error) {
 }
 
 func (f *form) launch() tea.Cmd {
+	if f.team != nil {
+		return f.followUp()
+	}
 	if f.opt.Launch == nil {
 		return nil
 	}
@@ -692,6 +778,29 @@ func (f *form) launch() tea.Cmd {
 		id, err := launch(req)
 		return launchedMsg{id, err}
 	}
+}
+
+// followUp sends the follow-up, with the team as it now is (nil if
+// unchanged), for the dashboard to start.
+func (f *form) followUp() tea.Cmd {
+	prompt := strings.TrimSpace(f.prompt.String())
+	if prompt == "" {
+		f.focusOn(field{kind: "prompt"})
+		f.err = "write what the agents should do next"
+		return nil
+	}
+	var team []NewAgent
+	changed := false
+	for i, a := range f.agents {
+		old := f.team.Agents[i]
+		team = append(team, NewAgent{Role: a.role, Provider: a.provider, Model: a.model, Effort: a.effort})
+		changed = changed || a.role != old.Role || a.model != old.Model || a.effort != old.Effort
+	}
+	if !changed {
+		team = nil
+	}
+	r := &resumeReq{task: f.team, followUp: prompt, team: team}
+	return func() tea.Msg { return followUpMsg{r} }
 }
 
 // launched records the outcome; it reports whether the form is done.
@@ -747,7 +856,10 @@ func (f *form) render(m *model, w, maxH int) string {
 		plines = []string{pFaint("Describe the task, e.g. “Add rate limiting to the API, with tests”")}
 	}
 	budget := maxH - 2
-	const fixed = 15
+	fixed := 15
+	if f.team != nil {
+		fixed = 12 // the task's lines instead of its settings, no add button
+	}
 	gaps, pl := 2, min(max(len(plines), 3), 7)
 	if fixed+gaps+pl+max(1, len(f.agents)) > budget {
 		gaps = 0
@@ -784,7 +896,11 @@ func (f *form) render(m *model, w, maxH int) string {
 	}
 
 	// The prompt editor.
-	add(label("WHAT SHOULD THE AGENTS DO?") + pDim("   enter adds a line · tab moves on"))
+	ask := "WHAT SHOULD THE AGENTS DO?"
+	if f.team != nil {
+		ask = "WHAT SHOULD THEY DO NEXT?"
+	}
+	add(label(ask) + pDim("   enter adds a line · tab moves on"))
 	boxEdge := fgp(edge)
 	if focused("prompt", 0) {
 		boxEdge = fgp(green)
@@ -794,6 +910,26 @@ func (f *form) render(m *model, w, maxH int) string {
 		add(boxEdge("│") + fill(l, pw, bg1) + boxEdge("│"))
 	}
 	add(boxEdge("╰" + strings.Repeat("─", pw) + "╯"))
+	if f.team != nil {
+		f.renderTeamHead(add, inner)
+		gap()
+	} else {
+		f.renderSettings(add, gap, inner, focused)
+	}
+	f.renderAgents(add, &lines, inner, c, shown, focused, label)
+	return f.renderEnd(m, lines, inner, w, cur)
+}
+
+// renderTeamHead is a follow-up's lines under the prompt: where, and how.
+func (f *form) renderTeamHead(add func(...string), inner int) {
+	t := f.team
+	add(pDim("IN         ")+pLime(ansi.Truncate(tildePath(t.Workspace), inner-11, "…")),
+		pDim(fit("Same agents, conversations and workspace; all must declare done again.", inner)),
+		pDim(fit("Change a role or effort freely; a new model starts that agent afresh.", inner)))
+}
+
+// renderSettings is the new-task form's name, workspace, repo and mode.
+func (f *form) renderSettings(add func(...string), gap func(), inner int, focused func(string, int) bool) {
 	name := textField(f.name, inner-11, focused("name", 0))
 	if f.name.String() == "" && !focused("name", 0) {
 		name = onp(bg3)(fill(" "+pFaint(f.suggestedName()), inner-11, bg3))
@@ -806,10 +942,14 @@ func (f *form) render(m *model, w, maxH int) string {
 	if f.untrusted() {
 		trust = "  " + checkbox("trust it", f.trust, focused("trust", 0))
 	}
-	if strings.TrimSpace(f.repo.String()) != "" {
-		trust = "  " + pDim("unused: the repo is cloned")
+	fieldW := inner - 11 - width(trust)
+	if repo := strings.TrimSpace(f.repo.String()); repo != "" {
+		// The workspace isn't used: say where the work will be instead,
+		// since it isn't the directory ackn4th was started in.
+		fieldW = min(fieldW, 14)
+		trust = "  " + f.repoWhere(repo, inner-11-fieldW-2)
 	}
-	add(pDim("WORKSPACE  ") + textField(f.workspace, inner-11-width(trust), focused("workspace", 0)) + trust)
+	add(pDim("WORKSPACE  ") + textField(f.workspace, fieldW, focused("workspace", 0)) + trust)
 	bw := min(28, max(12, (inner-11-9-9)/3))
 	add(pDim("GITHUB     ") + pDim("repo ") + textField(f.repo, inner-11-5-9-bw-2, focused("repo", 0)) +
 		pDim("  branch ") + textField(f.branch, bw, focused("branch", 0)))
@@ -821,7 +961,8 @@ func (f *form) render(m *model, w, maxH int) string {
 	}
 	mode := onp(modeBg)(" " + radio("turns", !f.parallel) + "   " + radio("parallel", f.parallel) + " ")
 	pr := checkbox("draft PR when done", f.draftPR, focused("pr", 0))
-	left := pDim("MODE       ") + mode + pDim("     ROUNDS ") + textField(f.rounds, 6, focused("rounds", 0))
+	left := pDim("MODE       ") + mode + pDim("     ROUNDS ") + textField(f.rounds, 6, focused("rounds", 0)) +
+		pDim("   CAP $") + textField(f.cost, 7, focused("cost", 0))
 	hint := ""
 	if room := inner - width(left) - width(pr) - 2; room >= 12 {
 		hint = pDim(fit("  0 = until every agent agrees", room))
@@ -830,7 +971,10 @@ func (f *form) render(m *model, w, maxH int) string {
 	}
 	add(left + hint + strings.Repeat(" ", max(1, inner-width(left)-width(hint)-width(pr)-1)) + pr)
 	gap()
+}
 
+// renderAgents is the agent rows.
+func (f *form) renderAgents(add func(...string), lines *[]string, inner int, c cols, shown int, focused func(string, int) bool, label func(string) string) {
 	// Agent rows.
 	count := fmt.Sprintf("  %d  ", len(f.agents))
 	if shown < len(f.agents) {
@@ -847,16 +991,20 @@ func (f *form) render(m *model, w, maxH int) string {
 		if a.editModel != nil {
 			modelCell = textField(*a.editModel, c.model, focused("model", i))
 		} else {
-			modelCell = dropField(a.model, c.model, text, focused("model", i), f.dropOpen("model", i))
+			modelCell = dropField(f.modelLabel(a), c.model, text, focused("model", i), f.dropOpen("model", i))
 		}
 		effort := cmpOr(a.effort, "default")
 		remove := pRed("✕")
 		if focused("remove", i) {
 			remove = onp(red)(fgp(bg0)(bold("✕")))
 		}
+		prov := dropField(a.provider, c.provider, pc, focused("provider", i), f.dropOpen("provider", i))
+		if f.team != nil {
+			remove, prov = " ", fgp(pc)(fit(" "+a.provider, c.provider))
+		}
 		row := fgp(pc)(fmt.Sprintf("%2d ", i+1)) +
 			dropField(strings.ReplaceAll(a.role, "+", " + "), c.role, pc, focused("role", i), f.dropOpen("role", i)) + " " +
-			dropField(a.provider, c.provider, pc, focused("provider", i), f.dropOpen("provider", i)) + " " +
+			prov + " " +
 			modelCell + " " +
 			dropField(effort, c.effort, text, focused("effort", i), f.dropOpen("effort", i)) + " " + remove
 		add(row)
@@ -871,12 +1019,20 @@ func (f *form) render(m *model, w, maxH int) string {
 				x += c.role + c.provider + c.model + 3
 			}
 			// +2: the panel's border and margin; +1: the border above.
-			f.drop.x, f.drop.y = x+2, len(lines)
+			f.drop.x, f.drop.y = x+2, len(*lines)
 			f.drop.w = max(map[string]int{"role": 44, "provider": 30, "model": 34, "effort": 24}[f.drop.owner.kind], c.model)
 		}
 	}
-	f.belowAgents = len(lines) + 1 // +1: the panel's top border
-	add("   "+button("+ ADD AGENT", focused("add", 0), bg2, false), "   "+buttonShadow("+ ADD AGENT", bg2))
+	f.belowAgents = len(*lines) + 1 // +1: the panel's top border
+	if f.team == nil {
+		add("   "+button("+ ADD AGENT", focused("add", 0), bg2, false), "   "+buttonShadow("+ ADD AGENT", bg2))
+	}
+}
+
+// renderEnd is the form's tips, errors and buttons, and the panel.
+func (f *form) renderEnd(m *model, lines []string, inner, w int, cur field) string {
+	add := func(s ...string) { lines = append(lines, s...) }
+	focused := func(kind string, agent int) bool { return cur.kind == kind && cur.agent == agent && f.drop == nil }
 
 	// The cache tip, any error, then the actions.
 	switch g := f.groups(); {
@@ -898,6 +1054,9 @@ func (f *form) render(m *model, w, maxH int) string {
 		add("", "")
 	}
 	launch := "▶ LAUNCH"
+	if f.team != nil {
+		launch = "▶ RUN IT"
+	}
 	if f.busy {
 		launch = m.spin(spinner) + " CHECKING"
 	}
@@ -911,6 +1070,9 @@ func (f *form) render(m *model, w, maxH int) string {
 	}
 	if f.drop != nil {
 		f.drop.y++ // the panel's top border
+	}
+	if f.team != nil {
+		return panel("FOLLOW-UP “"+ansi.Truncate(f.team.Title(), w-30, "…")+"”", pDim("esc closes · ctrl+s runs it"), lines, w, len(lines)+2, true, bg2)
 	}
 	return panel("NEW TASK", pDim("f1 help · esc closes · ctrl+s launches"), lines, w, len(lines)+2, true, bg2)
 }
@@ -1252,6 +1414,9 @@ func (m *model) drawForm(lines []string) string {
 func (m *model) formFooter() string {
 	chip := func(k, label string) string { return pill(k, bg3, lime) + pDim(" "+label+"  ") }
 	keys := [][2]string{{"f1", "help"}, {"tab", "next"}, {"↑↓←→", "move"}, {"⏎", "open · choose"}, {"space", "toggle"}, {"ctrl+n", "add agent"}, {"del", "remove agent"}, {"ctrl+s", "launch"}, {"esc", "close"}}
+	if m.form.team != nil {
+		keys = [][2]string{{"tab", "next"}, {"↑↓←→", "move"}, {"⏎", "new line · open a list"}, {"ctrl+s", "run it"}, {"esc", "cancel"}}
+	}
 	if m.form.drop != nil {
 		keys = [][2]string{{"↑↓", "move"}, {"a-z", "jump"}, {"⏎", "choose"}, {"esc", "close"}}
 		if m.form.drop.multi != nil {
@@ -1264,4 +1429,14 @@ func (m *model) formFooter() string {
 		b.WriteString(chip(k[0], k[1]))
 	}
 	return fill(b.String(), m.w, bg0)
+}
+
+// modelLabel is an agent row's model as shown: what an empty one means.
+func (f *form) modelLabel(a agentRow) string {
+	if a.model == "" {
+		if auto := f.provider(a.provider).AutoModel; auto != "" {
+			return auto
+		}
+	}
+	return a.model
 }

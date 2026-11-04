@@ -29,7 +29,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
 )
@@ -307,6 +306,14 @@ var secretsIn = []string{
 	"Library/Safari", "Library/Application Support/Google/Chrome", "Library/Application Support/Firefox",
 	"Library/Application Support/BraveSoftware", "Library/Application Support/Microsoft Edge",
 	".mozilla", ".config/google-chrome", ".config/chromium",
+	// Package registry and cloud tokens that live inside toolchain
+	// directories commands may read (CARGO_HOME) or beside them.
+	".cargo/credentials", ".cargo/credentials.toml", ".gem/credentials", ".gradle/gradle.properties",
+	".m2/settings.xml", ".terraform.d/credentials.tfrc.json", ".config/rclone", ".oci", ".config/doctl",
+	".config/op", ".bash_history", ".zsh_history", ".python_history", ".node_repl_history",
+	"AppData/Roaming/gcloud", "AppData/Roaming/gh", "AppData/Roaming/npm/.npmrc", "AppData/Roaming/Mozilla",
+	"AppData/Local/Google/Chrome", "AppData/Local/Microsoft/Edge", "AppData/Local/BraveSoftware",
+	"AppData/Roaming/Microsoft/Credentials", "AppData/Local/Microsoft/Credentials", "AppData/Roaming/Microsoft/Protect",
 }
 
 // hidden lists every path commands can't read: the user's secrets and
@@ -377,9 +384,4 @@ func (c *capped) String() string {
 		return c.head.String() + c.tail.String()
 	}
 	return fmt.Sprintf("%s\n… %d bytes of output cut …\n%s", c.head.String(), c.cut, c.tail.String())
-}
-
-// sbQuote quotes s for a Seatbelt profile string.
-func sbQuote(s string) string {
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
 }

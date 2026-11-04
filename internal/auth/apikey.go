@@ -15,7 +15,8 @@ const GeminiKeyURL = "https://aistudio.google.com/apikey"
 // ErrNoKey means no Gemini API key is stored; run `ackn4th login`.
 var ErrNoKey = errors.New("gemini: no API key stored: run `ackn4th login --provider gemini`")
 
-// geminiKeyEntry is the key's keychain entry, per sandbox like the session.
+// geminiKeyEntry is the key's keychain entry, one per sandbox, so a sandbox never
+// sees the normal install's key.
 func geminiKeyEntry() string {
 	if h, ok := config.Sandbox(); ok {
 		return "sandbox:" + h + ":gemini-api-key"
@@ -23,10 +24,10 @@ func geminiKeyEntry() string {
 	return "gemini-api-key"
 }
 
-// SaveGeminiKey stores a Gemini API key in the OS keychain. It is the one
-// long-lived credential ackn4th keeps, for users without Google Cloud, so
-// it never touches disk, flags or the environment, is only used while a
-// login session is live, and `ackn4th logout` deletes it.
+// SaveGeminiKey stores a Gemini API key in the OS keychain. It is a
+// long-lived credential, for users without Google Cloud, so it never
+// touches disk, flags or the environment, and `ackn4th logout` deletes
+// it.
 func SaveGeminiKey(key string) error {
 	key = strings.TrimSpace(key)
 	if err := checkGeminiKey(key); err != nil {
@@ -92,7 +93,7 @@ func openAIKeyEntry() string {
 var ErrNoOpenAIKey = errors.New("openai: no API key stored: run `ackn4th login --provider openai`")
 
 // SaveOpenAIKey stores an OpenAI API key, like SaveGeminiKey: only in the
-// secret store, used only during a session, deleted on logout.
+// secret store, deleted on logout.
 func SaveOpenAIKey(key string) error {
 	key = strings.TrimSpace(key)
 	if !strings.HasPrefix(key, "sk-") || len(key) < 20 || strings.ContainsAny(key, " \t\r\n\"'") {

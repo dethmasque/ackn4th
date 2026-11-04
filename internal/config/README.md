@@ -3,13 +3,15 @@
 [← README](../../README.md)
 
 `<config>/config.yaml` (run `ackn4th config init` to create it, `ackn4th
-config` to see the effective settings):
+config` to see the effective settings). The everyday ones can also be
+changed in the dashboard: **`C`** opens its
+[configuration](../dash/README.md#configuration), which saves each change
+to this file.
 
 ```yaml
 workspace_roots: [~/Git/ackn4th]          # trusted directories (ackn4th trust adds here)
 default_workspace_root: ~/ackn4th-workspaces   # --scratch and --repo work here
 default_provider: claude                  # one provider per team shares cached context
-session_ttl: 24h
 providers:
   claude: {model: claude-opus-5-5, max_tokens: 64000, effort: high, compact_at: 200000}
   gemini: {model: gemini-3.1-pro-preview, max_tokens: 65536, compact_at: 200000}   # auth: key (AI Studio)
@@ -34,10 +36,21 @@ voice:                                    # the dashboard reads itself aloud (ac
   enabled: false
   name: af_heart                          # ackn4th voice list
   speed: 1                                # 0.5 to 2
+spend:                                    # spending caps in dollars, unset by default (no limit)
+  per_task: 5                             # each task, over its whole life (start-task --max-cost overrides)
+  daily: 20                               # everything ackn4th spends, on every provider
+  monthly: 200
+  providers:
+    gemini: {daily: 5, monthly: 50}
+  prices:                                 # dollars per million tokens, for models ackn4th doesn't know
+    gpt-6-astra: {input: 2, cached: 0.2, output: 12}
 ```
 
-`disable-tips`, `voice on` and the OpenAI model choice at login change
-just their key, keeping the rest of the file and its comments.
+See [spending caps](../task/README.md#spending-caps).
+
+`disable-tips`, `voice on`, the OpenAI model choice at login and the
+dashboard's configuration change just their key, keeping the rest of the
+file and its comments.
 
 ## Where files live
 

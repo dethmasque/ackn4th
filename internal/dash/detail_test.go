@@ -47,7 +47,7 @@ func TestActivityDetail(t *testing.T) {
 		"maybe it is installed somewhere", // the reasoning before the call
 		`command: find / -name "three*.js" 2>/dev/null | head`,
 		"timeout_seconds: 120",
-		"✗ killed after 2m00s (timed out)",
+		"RESULT · ✗ failed", "killed after 2m00s (timed out)",
 		"(no output)",
 	} {
 		if !strings.Contains(screen, want) {
@@ -172,5 +172,33 @@ func TestExpandAndWrap(t *testing.T) {
 				t.Errorf("%v: line %d is %d wide", size, i, w)
 			}
 		}
+	}
+}
+
+// An agent CLI's failed tool (no call event of ours) shows its whole
+// result, wrapped, not one cut line.
+func TestCLIFailureInFull(t *testing.T) {
+	store := fixture(t)
+	long := "equipment cost HUD uses a placeholder label: expected 'target' but the test found 'par' in src/ui/render.js line 212, " +
+		"and the contrast check reports 4.1:1 for the muted text, under the 4.5:1 it needs. THE-END"
+	store.AppendEvent("k3f9qz", event.Event{Kind: event.ToolResult, Tool: "bash", Agent: 1, Role: "backend_dev", Round: 2, Time: time.Now(),
+		Text: long[:159] + "…", Detail: long, Error: true})
+	m := newModel(Options{Store: store})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m.key("2")
+	m.key("enter")
+	screen := ansi.Strip(m.render())
+	if !strings.Contains(screen, "THE-END") || !strings.Contains(screen, "RESULT · ✗ failed") {
+		t.Errorf("the result isn't shown in full:\n%s", screen)
+	}
+	var got []string
+	resultText(event.Event{Text: long[:159] + "…", Detail: long}, func(s string) { got = append(got, s) })
+	if len(got) != 1 || got[0] != long {
+		t.Errorf("the summary is repeated above the full result: %q", got)
+	}
+	got = nil
+	resultText(event.Event{Text: "exit 1 · 0s", Detail: "npm ERR! test failed"}, func(s string) { got = append(got, s) })
+	if len(got) != 2 {
+		t.Errorf("a summary that says more is dropped: %q", got)
 	}
 }

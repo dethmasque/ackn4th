@@ -37,10 +37,11 @@ ackn4th logout --provider openai --provider gemini  # just these; the rest stay 
 
 Signing out of a provider removes what ackn4th holds for it: API keys are
 deleted from the OS keychain, Gemini's Vertex AI refresh token is revoked,
-Claude's tokens are deleted. Agent CLIs (Claude Code, Codex, Cursor,
-Copilot) keep their own logins; ackn4th just stops using them. In the
-dashboard, `p` then `x` (twice, to confirm) does the same for the providers
-you pick.
+Claude's tokens are deleted, and running tasks that use it stop at their
+next request. Otherwise a provider stays signed in. ackn4th holds nothing
+for the agent CLIs (Claude Code, Codex, Cursor, Copilot): they keep their
+own logins, which you sign out of in the CLI itself. In the dashboard, `p`
+then `x` (twice, to confirm) signs out of the providers you pick.
 
 ## Choosing models
 

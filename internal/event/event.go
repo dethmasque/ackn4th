@@ -13,6 +13,7 @@ type Kind string
 
 const (
 	TaskStarted   Kind = "task_started"   // runner attached; Text holds "start" or "resume"
+	FollowUp      Kind = "follow_up"      // a follow-up starts running; Text = its prompt
 	RoundStarted  Kind = "round_started"  // Round set
 	TurnStarted   Kind = "turn_started"   // an agent begins its turn
 	Thinking      Kind = "thinking"       // streamed reasoning summary chunk (not persisted)

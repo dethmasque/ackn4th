@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/zalando/go-keyring"
 )
@@ -26,6 +27,11 @@ func secretsDir() (string, bool, error) {
 	dir := os.Getenv(SecretsDirEnv)
 	if dir == "" {
 		return "", false, nil
+	}
+	if runtime.GOOS == "windows" {
+		// Windows has no mode bits to check that the directory is
+		// private, and has Credential Manager: there is no need for it.
+		return "", true, fmt.Errorf("%s is for containers and isn't used on Windows: unset it, and ackn4th keeps secrets in Credential Manager", SecretsDirEnv)
 	}
 	fi, err := os.Stat(dir)
 	if err != nil {

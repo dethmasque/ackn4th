@@ -99,8 +99,11 @@ func (Copilot) Parse(line []byte, t *cliagent.Turn) {
 		}
 	case "tool.execution_complete":
 		if d.Success != nil && !*d.Success && d.MCPServerName != mcpbridge.Server {
-			b, _ := json.Marshal(d.Error)
-			t.Act(cmpOr(d.ToolName, "tool"), string(b), true)
+			msg := errorText(d.Error)
+			if strings.HasPrefix(msg, "MCP server '"+mcpbridge.Server+"'") {
+				break // ackn4th's own tool: its result is already in the log, in full
+			}
+			t.Act(cmpOr(d.ToolName, "tool"), msg, true)
 		}
 	case "session.error":
 		t.Error = cmpOr(d.Message, "the session failed")
@@ -186,4 +189,22 @@ func cmpOr(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// errorText is a tool failure as people read it: Copilot reports
+// {"code": "failure", "message": "…"}, the message being the story.
+func errorText(e any) string {
+	if m, ok := e.(map[string]any); ok {
+		if msg, ok := m["message"].(string); ok && msg != "" {
+			if code, _ := m["code"].(string); code != "" && code != "failure" {
+				return code + ": " + msg
+			}
+			return msg
+		}
+	}
+	if s, ok := e.(string); ok {
+		return s
+	}
+	b, _ := json.Marshal(e)
+	return string(b)
 }

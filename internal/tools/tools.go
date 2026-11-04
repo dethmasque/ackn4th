@@ -55,7 +55,7 @@ var (
 		},
 		{
 			Name:        ReadFile,
-			Description: "Read a text file from the workspace. For large files, read a window of lines with offset and limit.",
+			Description: "Read a text file from the workspace. For large files, read a window of lines with offset and limit. Read files with this, not with cat, grep or sed through run_command: edit_file only accepts files read here.",
 			Schema: obj([]string{"path"}, map[string]any{
 				"path":   str("File path relative to the workspace root."),
 				"offset": num("1-based line number to start at. Optional."),
@@ -138,7 +138,7 @@ var (
 	}
 	doneSpec = provider.ToolSpec{
 		Name:        DeclareDone,
-		Description: "Declare that, from your role's perspective, the whole task is complete and nothing more is needed. The task finishes only when every agent on the team declares done in consecutive turns. Do not call this if you still have concerns.",
+		Description: "Declare that, from your role's perspective, the whole task is complete and nothing more is needed. The task finishes only when every agent on the team declares done in the same round. Do not call this if something the task requires is missing; things only the person can do belong in add_user_todo and don't stop you.",
 		Schema: obj([]string{"summary"}, map[string]any{
 			"summary": str("What was delivered and how it was verified, in a few sentences."),
 		}),
@@ -171,7 +171,7 @@ func (p *CommandPolicy) spec() provider.ToolSpec {
 		Name: RunCommand,
 		Description: "Run a shell command (" + sandbox.Shell() + ") in the workspace root to build, test, lint, type-check or run the code, and get its exit code and output. " +
 			"It runs in a sandbox: it can write only inside the workspace (never .git or .ackn4th, and nothing at all for read-only roles), the home and temp directories are a private scratch directory, and credential files are unreadable. " + net +
-			fmt.Sprintf(" Commands are killed after %s; output is cut in the middle when long. Use it to verify your work, not to change files: make changes with the file tools.", ui.Duration(p.Timeout)),
+			fmt.Sprintf(" Commands are killed after %s; output is cut in the middle when long. Use it to verify your work, not to read or change files: read with read_file and search_files, and change files with the file tools.", ui.Duration(p.Timeout)),
 		Schema: obj([]string{"command"}, map[string]any{
 			"command":         str("The shell command, e.g. `go test ./...` or `npm test -- --run`."),
 			"timeout_seconds": num(fmt.Sprintf("Seconds before the command is killed. Optional; at most %d.", int(p.Timeout.Seconds()))),
@@ -672,7 +672,7 @@ func (e *Executor) Run(ctx context.Context, call provider.ToolCall) Result {
 			return fail("%v", err)
 		}
 		return Result{
-			Content: "Recorded. End your turn now with a brief closing message for your teammates.",
+			Content: "Recorded. End your turn now with a brief closing message.",
 			Summary: "done", Done: true, DoneSummary: in.Summary,
 		}
 	}

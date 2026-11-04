@@ -22,8 +22,8 @@ type Setup struct {
 	Status func() []ProviderState
 	// Done records that the offer was answered, so it isn't made again.
 	Done func()
-	// Logout signs out of providers: they leave the session and ackn4th
-	// deletes what it holds for them. Nil hides it.
+	// Logout signs out of providers: ackn4th deletes what it holds for
+	// them. Nil hides it.
 	Logout func(providers []string) error
 }
 
@@ -31,7 +31,7 @@ type Setup struct {
 type ProviderState struct {
 	Name string
 	Note string // what it is, e.g. "your ChatGPT plan, via the Codex CLI"
-	// Ready: signed in and part of the current session.
+	// Ready: signed in, so agents can use it.
 	Ready bool
 	// Missing: its CLI isn't installed; Hint says how to get it.
 	Missing bool
@@ -64,7 +64,7 @@ func (m *model) loadSetup() tea.Cmd {
 // on offer, with no tooltip, form or dialog in the way.
 func (m *model) maybeOfferSetup() tea.Cmd {
 	s := m.opt.Setup
-	if s == nil || !s.Offer || m.setup != nil || m.roles != nil || m.form != nil || m.confirm != "" || m.help {
+	if s == nil || !s.Offer || m.setup != nil || m.roles != nil || m.settings != nil || m.form != nil || m.confirm != "" || m.help {
 		return nil
 	}
 	if _, _, ok := m.tip(); ok {
@@ -235,7 +235,7 @@ func (m *model) drawSetup(lines []string) string {
 		pad := strings.Repeat(" ", max(0, inner-width(yb)-width(nb)-2))
 		add(pad+nb+"  "+yb, pad+buttonShadow("LATER", bg2)+"  "+buttonShadow("SET UP", bg2))
 	} else {
-		add("", pText("Pick the providers you use, then sign in. Ready ones stay signed in for up to 24 hours."), "")
+		add("", pText("Pick the providers you use, then sign in. They stay signed in until you sign out."), "")
 		if v.loading && len(v.states) == 0 {
 			add(pDim(m.spin(spinner) + " checking each provider…"))
 		}

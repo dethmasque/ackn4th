@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/dethmasque/ackn4th/internal/spend"
 )
 
 const appName = "ackn4th"
@@ -38,6 +40,10 @@ type Provider struct {
 	Project  string `yaml:"project,omitempty"`
 	Location string `yaml:"location,omitempty"`
 }
+
+// ErrNoModel is returned when an agent's provider has no model configured
+// (openai, until one is picked for the key).
+var ErrNoModel = errors.New("no model set")
 
 // Gemini auth methods.
 const (
@@ -100,10 +106,8 @@ type Config struct {
 	DefaultWorkspaceRoot string `yaml:"default_workspace_root"`
 	// DefaultProvider powers every role not assigned one. A team on one
 	// provider and model shares its cached context; see start-task --mix.
-	DefaultProvider string `yaml:"default_provider"`
-	// SessionTTL is how long a login lasts.
-	SessionTTL time.Duration       `yaml:"session_ttl"`
-	Providers  map[string]Provider `yaml:"providers"`
+	DefaultProvider string              `yaml:"default_provider"`
+	Providers       map[string]Provider `yaml:"providers"`
 	// Agents are named agent profiles (provider, model, effort, ...).
 	Agents map[string]AgentProfile `yaml:"agents,omitempty"`
 	Limits Limits                  `yaml:"limits"`
@@ -124,6 +128,10 @@ type Config struct {
 	// and what changed. It runs on this computer (no account, no network
 	// once installed); `ackn4th voice install` downloads it.
 	Voice Voice `yaml:"voice"`
+	// Spend caps what agents spend on billed providers (claude, gemini,
+	// openai), estimated from their token counts: per task, per provider
+	// and for all of ackn4th, a day and a month. Unset caps are no limit.
+	Spend spend.Limits `yaml:"spend,omitempty"`
 }
 
 // Voice configures the dashboard's spoken feedback.
@@ -164,7 +172,6 @@ func Default() Config {
 	return Config{
 		WorkspaceRoots:       []string{},
 		DefaultWorkspaceRoot: root,
-		SessionTTL:           24 * time.Hour,
 		Providers:            providers,
 		Limits: Limits{
 			MaxRounds:       10,
@@ -307,6 +314,9 @@ func Load() (Config, error) {
 			p.CompactAt = def.CompactAt
 		}
 		cfg.Providers[name] = p
+	}
+	if err := cfg.Spend.Validate(); err != nil {
+		return Default(), fmt.Errorf("%s: %w", path, err)
 	}
 	return cfg, nil
 }
@@ -494,7 +504,7 @@ func (c Config) ResolveAgent(profile string, override AgentProfile) (AgentProfil
 	out.CompactAt = pickN(override.CompactAt, out.CompactAt, base.CompactAt)
 
 	if out.Model == "" {
-		return out, fmt.Errorf("no model set for %s", out.Provider)
+		return out, fmt.Errorf("%w for %s", ErrNoModel, out.Provider)
 	}
 	if out.Effort != "" && !slices.Contains(Efforts, out.Effort) {
 		return out, fmt.Errorf("effort %q is not one of %s", out.Effort, strings.Join(Efforts, ", "))

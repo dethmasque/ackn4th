@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,31 @@ func open(t *testing.T, writable ...string) (*Workspace, string) {
 	}
 	t.Cleanup(func() { w.Close() })
 	return w, dir
+}
+
+// Listing and searching find what's there. On Windows they once found
+// nothing at all, with the error thrown away by every caller: this says
+// why if it happens again.
+func TestListAndSearch(t *testing.T) {
+	w, dir := open(t, "**")
+	os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("needle\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "sub", "b.txt"), []byte("hay\nneedle\n"), 0o644)
+
+	entries, _, err := w.List(".", 5, 50)
+	if err != nil || len(entries) != 3 {
+		t.Errorf("List = %+v, %v (dir %s, hidden %q)", entries, err, dir, w.hidden)
+	}
+	hits, _, err := w.Search("needle", ".", "", 10)
+	if err != nil || len(hits) != 2 || hits[1].Path != "sub/b.txt" || hits[1].Line != 2 {
+		t.Errorf("Search = %+v, %v (dir %s, hidden %q)", hits, err, dir, w.hidden)
+	}
+	if _, err := w.root.Stat("."); err != nil {
+		t.Errorf("stat the root: %v", err)
+	}
+	if _, err := fs.ReadDir(w.root.FS(), "."); err != nil {
+		t.Errorf("read the root: %v", err)
+	}
 }
 
 func TestEscapesAreRejected(t *testing.T) {
@@ -218,14 +244,29 @@ func TestProtectedAliases(t *testing.T) {
 }
 
 func TestWinAlias(t *testing.T) {
-	for _, seg := range []string{"x:stream", "GIT~1", ".git.", ".git ", "PROGRA~2"} {
+	for _, seg := range []string{"x:stream", "GIT~1", ".git.", ".git ", "PROGRA~2", "NUL", "con.txt", "Com1", "LPT9.log", "aux", "CONOUT$"} {
 		if !winAlias(seg) {
 			t.Errorf("%q should count as an alias", seg)
 		}
 	}
-	for _, seg := range []string{".git", "main.go", "a~b", "v1.2", "file~"} {
+	for _, seg := range []string{".git", "main.go", "a~b", "v1.2", "file~", "console.go", "nullable", "com10", "auxiliary.txt", "lpt"} {
 		if winAlias(seg) {
 			t.Errorf("%q is a plain name", seg)
+		}
+	}
+}
+
+// TestWindowsNames runs Windows' name rules on every OS: the root is
+// fine, names Windows would read as another file are not.
+func TestWindowsNames(t *testing.T) {
+	for _, p := range []string{"", ".", "./", "/", "src", "src/main.go", "a/./b"} {
+		if _, err := cleanFor(p, true); err != nil {
+			t.Errorf("%q refused: %v", p, err)
+		}
+	}
+	for _, p := range []string{".git.", "src/GIT~1/config", "a.txt:stream", "NUL", "con.txt", "dir /x"} {
+		if _, err := cleanFor(p, true); err == nil {
+			t.Errorf("%q accepted", p)
 		}
 	}
 }

@@ -1,7 +1,8 @@
 # Tests on each OS ackn4th supports, including its sandbox: Seatbelt on
-# macOS, AppContainer on Windows. (GitHub's Ubuntu runners restrict user
-# namespaces, so the bubblewrap tests skip there; `just test-linux` runs
-# them in a container.)
+# macOS. (GitHub's Ubuntu runners restrict user namespaces, so the
+# bubblewrap tests skip there; `just test-linux` runs them in a
+# container.) Windows release builds have no sandbox; the AppContainer one
+# is built with -tags winsandbox and tested on its own until it confines.
 name: ci
 on:
   push:
@@ -13,6 +14,28 @@ permissions:
   contents: read
 
 jobs:
+  # The gate for shipping Windows: in-sandbox security tests on a real
+  # Windows runner, none skipped. Don't enable Windows in goreleaser until
+  # this is green (docs/adr/0001-windows-release-gate.md).
+  windows-sandbox:
+    # Expected to fail until the AppContainer sandbox confines, so it
+    # doesn't fail the workflow (continue-on-error), and it's skipped on
+    # tag builds, which release.yml runs. When enabling Windows in
+    # goreleaser, delete both so the gate blocks the release.
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    continue-on-error: true
+    runs-on: windows-2025 # pinned image; bump deliberately
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: sandbox security tests (none may skip)
+        shell: bash
+        run: bash scripts/windows-sandbox-gate.sh
+
   test:
     strategy:
       fail-fast: false
@@ -36,3 +59,11 @@ jobs:
           go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
           go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - run: go test ./...
+      - name: cross-compile Windows and the other targets
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -trimpath -o /dev/null ./cmd/ackn4th
+            GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go vet ./...
+          done

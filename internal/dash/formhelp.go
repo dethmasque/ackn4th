@@ -13,12 +13,13 @@ var fieldTips = map[string]string{
 	"branch":    "optional, e.g. fix/rate-limit: checked out if it exists locally or on origin, else created",
 	"mode":      "turns: one agent at a time, each building on the last · parallel: all at once",
 	"rounds":    "how many rounds the team gets; 0 runs until every agent agrees it's done",
+	"cost":      "the most this task may spend, in dollars, estimated (claude, gemini, openai); empty uses the configured cap (C)",
 	"pr":        "when the task finishes, push its branch and open a draft pull request (needs gh)",
 	"role":      "what this agent does on the team; R on the dashboard adds or edits roles",
 	"provider":  "the AI service this agent runs on; p on the dashboard shows which are signed in",
 	"model":     "the provider's model; pick a suggestion, or “type a model id…” for any other",
 	"effort":    "how hard the model thinks; higher is slower and costs more, default is the provider's",
-	"remove":    "remove this agent (also ctrl+x on any of its fields)",
+	"remove":    "remove this agent (also x or ctrl+x on any of its fields)",
 	"add":       "add another agent (also ctrl+n)",
 	"cancel":    "close the form; nothing is saved",
 	"launch":    "check the providers are signed in, then start the task in the background",
@@ -34,7 +35,7 @@ var formHelpRows = [][2]string{
 	{"MODE", "turns: agents take turns, each seeing the last's work.\nparallel: all at once (needs two or more agents)."},
 	{"ROUNDS", "How many rounds to run; 0 runs until all agents agree."},
 	{"AGENTS", "Each is a role on a provider, model and effort. Agents\nwith the same provider, model and effort share a cache."},
-	{"KEYS", "tab, shift+tab or arrows move · enter opens a list\nctrl+n adds an agent · ctrl+x removes one · ctrl+s launches\nf1 (or ? off a text field) shows this · esc closes the form"},
+	{"KEYS", "tab, shift+tab or arrows move · enter opens a list\nctrl+n adds an agent · x removes the selected one · ctrl+s launches\nf1 (or ? off a text field) shows this · esc closes the form"},
 }
 
 // formHelpBox is the new-task form's help panel, at most w cells wide and,

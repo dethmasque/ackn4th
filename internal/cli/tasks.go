@@ -20,6 +20,7 @@ import (
 	"github.com/dethmasque/ackn4th/internal/event"
 	"github.com/dethmasque/ackn4th/internal/github"
 	"github.com/dethmasque/ackn4th/internal/provider/claudecode"
+	"github.com/dethmasque/ackn4th/internal/provider/openai"
 	"github.com/dethmasque/ackn4th/internal/task"
 	"github.com/dethmasque/ackn4th/internal/ui"
 	"github.com/dethmasque/ackn4th/internal/workspace"
@@ -39,6 +40,7 @@ type runFlags struct {
 	repo       string
 	branch     string
 	draftPR    bool
+	maxCost    float64
 }
 
 func (f *runFlags) register(cmd *cobra.Command) {
@@ -52,8 +54,10 @@ func (f *runFlags) register(cmd *cobra.Command) {
 	cmd.Flags().BoolVarP(&f.detach, "detach", "d", false, "run in the background (follow with watch-task, stop with stop-task)")
 	cmd.Flags().StringVar(&f.repo, "repo", "", "work in a GitHub repository, as `owner/name` or its github.com URL: cloned with gh into default_workspace_root, or reused")
 	cmd.Flags().StringVar(&f.branch, "branch", "", "git `branch` to work on: checked out, fetched from GitHub, or created from the current commit")
+	cmd.Flags().Float64Var(&f.maxCost, "max-cost", 0, "cap the task's spending at `dollars`, estimated from token counts on billed providers (default: spend.per_task)")
 	cmd.Flags().BoolVar(&f.draftPR, "draft-pr", false, "when the task completes, propose its changes as a draft GitHub pull request (needs gh)")
 	rejectNegative(cmd, "rounds")
+	rejectNegative(cmd, "max-cost")
 }
 
 // rejectNegative makes cmd fail when an int flag is set below zero.
@@ -62,6 +66,9 @@ func rejectNegative(cmd *cobra.Command, flag string) {
 	cmd.PreRunE = func(c *cobra.Command, args []string) error {
 		if n, err := c.Flags().GetInt(flag); err == nil && n < 0 && c.Flags().Changed(flag) {
 			return fmt.Errorf("--%s can't be negative (0 means no limit)", flag)
+		}
+		if v, err := c.Flags().GetFloat64(flag); err == nil && v < 0 && c.Flags().Changed(flag) {
+			return fmt.Errorf("--%s can't be negative", flag)
 		}
 		if prev != nil {
 			return prev(c, args)
@@ -423,7 +430,7 @@ func (a *app) launch(ctx context.Context, f *runFlags, args []string, reqs []age
 			return fmt.Errorf("--draft-pr: %w", err)
 		}
 	}
-	if err := a.requireSession(provs...); err != nil {
+	if err := a.requireSignedIn(provs...); err != nil {
 		return err
 	}
 	if err := a.preflight(ctx, agents, true); err != nil {
@@ -437,7 +444,7 @@ func (a *app) launch(ctx context.Context, f *runFlags, args []string, reqs []age
 	case rounds < 0:
 		rounds = a.cfg.Limits.MaxRounds
 	}
-	tk := &task.Task{ID: id, Name: name, Prompt: prompt, Workspace: dir, Agents: agents, MaxRounds: rounds, DraftPR: f.draftPR, Branch: f.branch}
+	tk := &task.Task{ID: id, Name: name, Prompt: prompt, Workspace: dir, Agents: agents, MaxRounds: rounds, MaxCost: f.maxCost, DraftPR: f.draftPR, Branch: f.branch}
 	if f.parallel {
 		if len(agents) < 2 {
 			return errors.New("--parallel needs at least two agents")
@@ -512,6 +519,11 @@ func (a *app) resolveAgents(reqs []agentReq) ([]task.AgentSpec, []string, error)
 			return nil, nil, fmt.Errorf("unknown provider %q (supported: %s)", req.set.Provider, providerNames())
 		}
 		p, err := a.cfg.ResolveAgent(req.profile, req.set)
+		if errors.Is(err, config.ErrNoModel) && p.Provider == openai.Name {
+			if err = a.pickOpenAIModel(context.Background()); err == nil {
+				p, err = a.cfg.ResolveAgent(req.profile, req.set)
+			}
+		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", r.Name, err)
 		}
@@ -696,6 +708,7 @@ its in-flight request and saves state; nothing done so far is lost, and
 
 func resumeTaskCmd(a *app) *cobra.Command {
 	var rounds int
+	var maxCost float64
 	var detach bool
 	var note, prov string
 	cmd := &cobra.Command{
@@ -707,7 +720,8 @@ func resumeTaskCmd(a *app) *cobra.Command {
 running in the background, attach to its live output instead.
 
 --rounds adds rounds beyond the current one (useful after hitting the round
-limit); --note passes guidance from you to the next agent.
+limit); --max-cost lets it spend that many dollars more (after hitting its
+spending cap); --note passes guidance from you to the next agent.
 
 --provider moves every agent to another provider, e.g. from claude (API
 credits) to claude-code (your Claude plan, through your local Claude
@@ -736,7 +750,7 @@ and the task's history carry over.`,
 			if err != nil {
 				return err
 			}
-			if err := a.requireSession(taskProviders(tk, moves)...); err != nil {
+			if err := a.requireSignedIn(taskProviders(tk, moves)...); err != nil {
 				return err
 			}
 			if err := a.applySwitch(tk, moves); err != nil {
@@ -755,6 +769,9 @@ and the task's history carry over.`,
 			} else if tk.MaxRounds > 0 && tk.Round > tk.MaxRounds {
 				return fmt.Errorf("task %s used all %d rounds: pass --rounds N to continue", tk.Label(), tk.MaxRounds)
 			}
+			if cmd.Flags().Changed("max-cost") {
+				tk.MaxCost = tk.Cost() + maxCost
+			}
 			if note != "" {
 				tk.Note = note
 			}
@@ -771,9 +788,79 @@ and the task's history carry over.`,
 	}
 	cmd.Flags().IntVarP(&rounds, "rounds", "r", 0, "`n` more rounds to allow from here; 0 runs until consensus")
 	rejectNegative(cmd, "rounds")
+	cmd.Flags().Float64Var(&maxCost, "max-cost", 0, "let the task spend up to `dollars` more, past its spending cap (estimated; billed providers only)")
+	rejectNegative(cmd, "max-cost")
 	cmd.Flags().BoolVarP(&detach, "detach", "d", false, "resume in the background")
 	cmd.Flags().StringVarP(&note, "note", "n", "", "guidance `text` for the next agent")
 	cmd.Flags().StringVar(&prov, "provider", "", "move every agent to this `provider` first, e.g. claude-code")
+	return cmd
+}
+
+func followUpCmd(a *app) *cobra.Command {
+	var rounds int
+	var maxCost float64
+	var detach bool
+	cmd := &cobra.Command{
+		Use:     "follow-up <task> [prompt]",
+		GroupID: "tasks",
+		Aliases: []string{"followup"},
+		Short:   "Ask a finished task's team for more work",
+		Long: `Give a task that isn't running a new request, and run it again. The same
+agents continue with their conversations, the workspace and the task's
+history: every agent gets the follow-up at the start of its next turn, and
+every agent has to declare done again.
+
+It works on completed, stopped and failed tasks. Without --rounds, the
+follow-up gets as many rounds as the task's last run allowed (or runs until
+the agents agree, if that had no limit).`,
+		Example: `  ackn4th follow-up kjbk3z "Also update the Windows notes in CONTRIBUTING.md"
+  ackn4th follow-up kjbk3z "Address the review comments in REVIEW.md" --rounds 2 -d`,
+		Args: upTo(2, "<task> [prompt]"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			tk, err := a.taskArg(args, func(tk *task.Task) bool { return tk.Status != task.Running })
+			if err != nil {
+				return err
+			}
+			a.store.Reconcile(tk)
+			prompt := ""
+			if len(args) > 1 {
+				prompt = args[1]
+			}
+			if strings.TrimSpace(prompt) == "" {
+				prompt, err = a.ask(usageError{errors.New("missing the follow-up prompt")}, "what should the agents do next?", nil)
+				if err != nil {
+					return err
+				}
+			}
+			if err := a.requireSignedIn(taskProviders(tk, nil)...); err != nil {
+				return err
+			}
+			n := -1
+			if cmd.Flags().Changed("rounds") {
+				n = rounds
+			}
+			if err := tk.AddFollowUp(prompt, n, time.Now()); err != nil {
+				return err
+			}
+			if cmd.Flags().Changed("max-cost") {
+				tk.MaxCost = tk.Cost() + maxCost
+			}
+			if err := a.store.Save(tk); err != nil {
+				return err
+			}
+			a.term.Banner()
+			header(a.term, tk)
+			if detach {
+				return a.detach(tk)
+			}
+			return a.runForeground(cmd.Context(), tk.ID)
+		},
+	}
+	cmd.Flags().IntVarP(&rounds, "rounds", "r", 0, "`n` rounds for the follow-up; 0 runs until the agents agree")
+	rejectNegative(cmd, "rounds")
+	cmd.Flags().Float64Var(&maxCost, "max-cost", 0, "let the task spend up to `dollars` more, past its spending cap (estimated; billed providers only)")
+	rejectNegative(cmd, "max-cost")
+	cmd.Flags().BoolVarP(&detach, "detach", "d", false, "run it in the background")
 	return cmd
 }
 
@@ -892,10 +979,10 @@ start of its ID.`,
 				}
 				rows = append(rows, []string{
 					t.Bold(ui.Truncate(tk.Title(), 32)), t.Gray(tk.ID), statusLabel(t, tk.Status) + bg, strings.Join(team, t.Moss(" ⇄ ")), round,
-					ui.Tokens(u.InputTokens + u.OutputTokens), ui.Ago(tk.UpdatedAt),
+					ui.Tokens(u.InputTokens + u.OutputTokens), costCell(tk.Cost()), ui.Ago(tk.UpdatedAt),
 				})
 			}
-			t.Table([]string{"NAME", "ID", "STATUS", "TEAM", "ROUND", "TOKENS", "UPDATED"}, rows)
+			t.Table([]string{"NAME", "ID", "STATUS", "TEAM", "ROUND", "TOKENS", "COST", "UPDATED"}, rows)
 			if !all && len(tasks) > 20 {
 				t.Println(t.Gray(fmt.Sprintf("  … %d more (use --all)", len(tasks)-20)))
 			}

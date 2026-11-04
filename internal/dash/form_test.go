@@ -50,9 +50,9 @@ func press(m *model, keys ...string) {
 
 func TestFormRendersEveryState(t *testing.T) {
 	var launched []NewTask
-	// prompt, name, workspace, repo, branch, mode, rounds, draft PR: then
-	// the first agent's role.
-	toRole := []string{"n", "tab", "tab", "tab", "tab", "tab", "tab", "tab", "tab"}
+	// prompt, name, workspace, repo, branch, mode, rounds, cost cap,
+	// draft PR: then the first agent's role.
+	toRole := []string{"n", "tab", "tab", "tab", "tab", "tab", "tab", "tab", "tab", "tab"}
 	for _, size := range [][2]int{{80, 22}, {120, 40}, {200, 60}} {
 		for _, keys := range [][]string{
 			{"n"},
@@ -387,6 +387,20 @@ func TestFormRemovesEveryAgent(t *testing.T) {
 	press(m, "enter")
 	if len(f.agents) != 1 {
 		t.Errorf("add should bring a row back: %+v", f.agents)
+	}
+	// x removes the agent whose role, provider, model or effort is
+	// focused, as the ✕ button does.
+	press(m, "ctrl+n")
+	f.focusOn(field{"effort", 0})
+	press(m, "x")
+	if len(f.agents) != 1 || f.current() != (field{"remove", 0}) {
+		t.Errorf("x on an agent's effort should remove it: %+v, focus %v", f.agents, f.current())
+	}
+	// In a text field, x is a letter.
+	f.focusOn(field{kind: "name"})
+	press(m, "x")
+	if len(f.agents) != 1 || f.name.String() != "x" {
+		t.Errorf("x in a text field should type: agents %d, name %q", len(f.agents), f.name.String())
 	}
 }
 

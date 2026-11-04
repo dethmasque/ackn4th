@@ -32,6 +32,11 @@ type Options struct {
 	Resume func(t *task.Task, provider string) error
 	// Delete removes a task's records; nil disables it.
 	Delete func(*task.Task) error
+	// FollowUp gives a task that isn't running a new prompt and starts it
+	// again in the background; nil disables it. team, unless nil, is each
+	// agent's role, model and effort from now on (providers unchanged). It
+	// may return *LoginRequired.
+	FollowUp func(t *task.Task, prompt string, team []NewAgent) error
 
 	// Launch starts a task from the new-task form in the background and
 	// returns its ID; nil hides the form. It may return *LoginRequired.
@@ -40,6 +45,14 @@ type Options struct {
 	Login func(providers []string) *exec.Cmd
 	// Trusted reports whether agents may work in a directory.
 	Trusted func(dir string) bool
+	// RepoDir is where a task for a GitHub repo works: the clone it makes,
+	// or reuses (exists), in the default workspace root. It changes
+	// nothing. nil hides it.
+	RepoDir func(repo string) (dir string, exists bool, err error)
+	// Uncommitted counts the files in a workspace with changes git hasn't
+	// committed; an error means it can't tell (not a repository). nil
+	// hides it.
+	Uncommitted func(dir string) (int, error)
 	// Roles and Providers are what the form offers; Defaults seed it.
 	Roles     []Choice
 	Providers []ProviderChoice
@@ -59,6 +72,8 @@ type Options struct {
 	// RoleAdmin is the roles screen (R): add, edit, import and remove
 	// roles; nil hides it.
 	RoleAdmin *Roles
+	// Settings is the configuration screen (C); nil hides it.
+	Settings *Settings
 }
 
 // Run shows the dashboard until the user quits.
@@ -122,12 +137,13 @@ type model struct {
 	help       bool
 	frame      int
 
-	form    *form      // the new-task form, while open
-	setup   *setupView // provider setup, while open
-	roles   *rolesView // the roles screen, while open
-	confirm string     // pending action: "stop" or "resume", asked in a dialog
-	no      bool       // the dialog's NO button is selected
-	runOn   string     // the resume dialog's provider; empty keeps each agent's
+	form     *form         // the new-task form, while open
+	setup    *setupView    // provider setup, while open
+	roles    *rolesView    // the roles screen, while open
+	settings *settingsView // the configuration screen, while open
+	confirm  string        // pending action: "stop" or "resume", asked in a dialog
+	no       bool          // the dialog's NO button is selected
+	runOn    string        // the resume dialog's provider; empty keeps each agent's
 	// resuming is a resume waiting on a sign-in, retried when it ends.
 	resuming *resumeReq
 	flash    string
@@ -135,11 +151,14 @@ type model struct {
 	failed   string // the last action's error; shown until the next key
 	err      error
 
-	speaker   Speaker  // the voice, while on
-	entered   bool     // while speaking: a task or tab was just reached
-	voiceBusy bool     // the voice is starting
-	closed    bool     // the dashboard has quit
-	news      []string // changes to say at the next tick
+	speaker      Speaker                 // the voice, while on
+	entered      bool                    // while speaking: a task or tab was just reached
+	answered     bool                    // a voice key was answered: speak says nothing more
+	changes      map[string]*changeState // what git says of stopped tasks' workspaces
+	voiceBusy    bool                    // the voice is starting
+	voiceRestart bool                    // it is starting again with a new voice or rate
+	closed       bool                    // the dashboard has quit
+	news         []string                // changes to say at the next tick
 }
 
 func newModel(opt Options) *model {
@@ -254,7 +273,10 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.frame%pollTicks == 0 {
 			m.poll()
 		}
-		return m, tea.Batch(tick(), m.maybeOfferSetup())
+		m.maybeOfferSettings()
+		return m, tea.Batch(tick(), m.maybeOfferSetup(), m.checkChanges())
+	case changesMsg:
+		m.changesChecked(msg)
 	case setupStatusMsg:
 		if m.setup != nil {
 			m.setup.states, m.setup.loading = msg, false
@@ -270,12 +292,22 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.copyDrag()
 			}
 		}
+		// The voice's keys answer anywhere and change nothing, not even
+		// a tip or the help panel.
+		if m.voiceKey(msg.String()) {
+			return m, nil
+		}
 		if _, typing := m.roles.typingRole(); typing {
 			return m, m.rolesKey(msg.String())
 		}
+		if m.settingsTyping() {
+			return m, m.settingsKey(msg.String())
+		}
 		if k := msg.String(); m.form == nil && m.confirm == "" && (k == "v" || k == "V") {
 			if k == "V" {
-				m.speaker.Repeat()
+				if m.speaker != nil {
+					m.speaker.Repeat()
+				}
 				return m, nil
 			}
 			m.help = false
@@ -283,6 +315,9 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.roles != nil {
 			return m, m.rolesKey(msg.String())
+		}
+		if m.settings != nil {
+			return m, m.settingsKey(msg.String())
 		}
 		if m.setup != nil {
 			return m, m.setupKey(msg.String())
@@ -299,11 +334,16 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.key(msg.String())
 	case tea.PasteMsg:
-		if m.roles != nil {
+		if m.settingsTyping() {
+			m.settings.edit.insert(strings.TrimSpace(msg.Content))
+		} else if m.roles != nil {
 			m.rolePaste(msg.Content)
 		} else if m.form != nil {
 			m.form.paste(msg.Content)
 		}
+	case followUpMsg:
+		m.form = nil
+		return m, m.resume(msg.r)
 	case launchedMsg:
 		if m.form != nil && m.form.launched(msg) {
 			m.form = nil
@@ -329,7 +369,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if r := m.resuming; r != nil {
 			m.resuming = nil
 			if msg.err != nil {
-				m.failed = "resume failed: sign-in didn't finish (the reason was on the sign-in screen)"
+				m.failed = "couldn't start it: sign-in didn't finish (the reason was on the sign-in screen)"
 			} else {
 				return m, m.resume(r)
 			}
@@ -340,7 +380,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// The NEW TASK buttons: atop the task list, or anywhere on the
 		// empty welcome panel.
-		if m.form == nil && m.confirm == "" && msg.Button == tea.MouseLeft {
+		if m.form == nil && m.confirm == "" && m.settings == nil && m.setup == nil && m.roles == nil && msg.Button == tea.MouseLeft {
 			top := len(m.hero()) + 1
 			onList := msg.X < min(36, max(28, m.w/4)) && msg.Y >= top && msg.Y <= top+1
 			if onList || len(m.tasks) == 0 {
@@ -410,12 +450,16 @@ func (m *model) key(k string) (tea.Model, tea.Cmd) {
 		return m, m.openSetup()
 	case "R":
 		m.openRoles()
+	case "C":
+		m.openSettings(false)
 	case "t":
 		m.replayTour()
 	case "e":
 		if l != nil {
 			m.open = &detail{task: true}
 		}
+	case "a":
+		m.openFollowUp()
 	case "c", "y":
 		return m, m.copySelected()
 	case "?":
@@ -585,7 +629,7 @@ func (m *model) act(what string) tea.Cmd {
 			m.say("stopping " + l.Task.Title() + "… it saves its state and can be resumed")
 		}
 	case "resume":
-		return m.resume(&resumeReq{l.Task, m.runOn})
+		return m.resume(&resumeReq{task: l.Task, provider: m.runOn})
 	case "delete":
 		err = m.opt.Delete(l.Task)
 		if err == nil {
@@ -609,14 +653,24 @@ func (m *model) act(what string) tea.Cmd {
 type resumeReq struct {
 	task     *task.Task
 	provider string
+	followUp string     // a follow-up's prompt, to start with that instead
+	team     []NewAgent // with a follow-up: every agent's new settings; nil keeps them
 }
 
 // resume starts r's task again. When a provider needs a sign-in first,
 // it hands the terminal to the sign-in and retries afterwards.
 func (m *model) resume(r *resumeReq) tea.Cmd {
-	err := m.opt.Resume(r.task, r.provider)
+	var err error
+	if r.followUp != "" {
+		err = m.opt.FollowUp(r.task, r.followUp, r.team)
+	} else {
+		err = m.opt.Resume(r.task, r.provider)
+	}
 	var lr *LoginRequired
 	switch {
+	case err == nil && r.followUp != "":
+		m.say("follow-up started: " + r.task.Title() + " runs again in the background")
+		m.poll()
 	case err == nil:
 		on := ""
 		if r.provider != "" {
@@ -694,6 +748,8 @@ func (m *model) draw() string {
 	lines = append(lines, m.footer())
 	screen := strings.Join(lines, "\n")
 	switch {
+	case m.settings != nil:
+		screen = m.drawSettings(lines)
 	case m.roles != nil:
 		screen = m.drawRoles(lines)
 	case m.setup != nil:

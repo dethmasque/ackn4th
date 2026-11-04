@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dethmasque/ackn4th/internal/event"
 	"github.com/dethmasque/ackn4th/internal/provider"
 	"github.com/dethmasque/ackn4th/internal/role"
 )
@@ -271,19 +272,19 @@ func TestExpiredSessionStopsMidTurn(t *testing.T) {
 	r.Authorize = func(string) error {
 		requests++
 		if requests > 1 {
-			return errors.New("session expired")
+			return errors.New("openai was signed out")
 		}
 		return nil
 	}
 	got, err := r.Run(context.Background(), tk.ID, false)
-	if err != nil || got.Status != Stopped || !strings.Contains(got.Reason, "session expired") {
+	if err != nil || got.Status != Stopped || !strings.Contains(got.Reason, "openai was signed out") {
 		t.Fatalf("status=%s reason=%q err=%v", got.Status, got.Reason, err)
 	}
 	if len(in) != 1 {
 		t.Fatalf("a request was sent after expiry: %q", in)
 	}
 
-	r.Authorize = nil // logged in again
+	r.Authorize = nil // signed in again
 	if got, err = r.Run(context.Background(), tk.ID, false); err != nil || got.Status != Completed {
 		t.Fatalf("after re-login: %s %v", got.Status, err)
 	}
@@ -478,5 +479,71 @@ func TestSameProviderTeamSharesPrefix(t *testing.T) {
 	}
 	if sc.prewarms != 1 {
 		t.Errorf("prewarmed %d times, want once for the group", sc.prewarms)
+	}
+}
+
+// A finished task takes a follow-up: every agent gets it once, at the
+// start of its next turn, and all must declare done again.
+func TestFollowUp(t *testing.T) {
+	for _, mode := range []string{"", ModeParallel} {
+		var claudeIn, geminiIn []string
+		turn := func(summary string) []*provider.Reply {
+			return []*provider.Reply{toolReply(call("declare_done", map[string]string{"summary": summary})), textReply("ok")}
+		}
+		scripts := map[string]*script{
+			"claude": {name: "claude", inputs: &claudeIn, replies: append(turn("built"), turn("tested")...)},
+			"gemini": {name: "gemini", inputs: &geminiIn, replies: append(turn("reviewed"), turn("reviewed again")...)},
+		}
+		r, tk := setup(t, scripts,
+			AgentSpec{Role: "backend_dev", Provider: "claude"},
+			AgentSpec{Role: "code_reviewer", Provider: "gemini"})
+		tk.Mode, tk.MaxRounds = mode, 3
+		r.Store.Save(tk)
+		got, err := r.Run(context.Background(), tk.ID, false)
+		if err != nil || got.Status != Completed {
+			t.Fatalf("%q: first run: %s %v", mode, got.Status, err)
+		}
+		if err := got.AddFollowUp("  ", -1, time.Now()); err == nil {
+			t.Error("an empty follow-up should be refused")
+		}
+		if err := got.AddFollowUp("Also add tests for main.go", -1, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		got.FollowUps[0].Changes = []string{"agent 2 uses max effort (was default)"}
+		if got.Status != Stopped || got.Agents[0].Done || got.MaxRounds != got.Round-1+3 {
+			t.Errorf("%q: after the follow-up: status=%s done=%v round=%d max=%d", mode, got.Status, got.Agents[0].Done, got.Round, got.MaxRounds)
+		}
+		r.Store.Save(got)
+		got, err = r.Run(context.Background(), tk.ID, false)
+		if err != nil || got.Status != Completed || !strings.Contains(got.Reason, "tested") {
+			t.Fatalf("%q: follow-up run: %s %q %v", mode, got.Status, got.Reason, err)
+		}
+		for name, in := range map[string][]string{"claude": claudeIn, "gemini": geminiIn} {
+			if len(in) != 4 {
+				t.Fatalf("%q %s: %d inputs", mode, name, len(in))
+			}
+			if strings.Contains(in[0], "Follow-up") || !strings.Contains(in[2], "# Follow-up from the person who gave the task") || !strings.Contains(in[2], "Also add tests for main.go") ||
+				!strings.Contains(in[2], "The team changed for this follow-up (the roles above are current):\n\n- agent 2 uses max effort (was default)") {
+				t.Errorf("%q %s: follow-up not delivered once, at its next turn:\n%s", mode, name, in[2])
+			}
+		}
+		for i, a := range got.Agents {
+			if a.FollowUpsSeen != 1 {
+				t.Errorf("%q: agent %d saw %d follow-ups", mode, i, a.FollowUpsSeen)
+			}
+		}
+		if got.FollowUpPending() {
+			t.Errorf("%q: a follow-up still pending", mode)
+		}
+		evs, _, _ := r.Store.ReadEvents(tk.ID, 0)
+		n := 0
+		for _, e := range evs {
+			if e.Kind == event.FollowUp && e.Text == "Also add tests for main.go" {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Errorf("%q: %d follow-up events", mode, n)
+		}
 	}
 }

@@ -192,7 +192,11 @@ func (w *Workspace) ReadOnly() bool { return len(w.writable) == 0 }
 func (w *Workspace) Writable() []string { return w.writable }
 
 // clean normalizes an agent-supplied path to a slash-separated relative path.
-func clean(p string) (string, error) {
+func clean(p string) (string, error) { return cleanFor(p, runtime.GOOS == "windows") }
+
+// cleanFor is clean, with Windows' extra name rules when windows is set,
+// so they are tested on every OS.
+func cleanFor(p string, windows bool) (string, error) {
 	p = strings.TrimSpace(strings.ReplaceAll(p, "\\", "/"))
 	if p == "" || p == "/" {
 		return ".", nil
@@ -204,7 +208,12 @@ func clean(p string) (string, error) {
 	if c == ".." || strings.HasPrefix(c, "../") {
 		return "", fmt.Errorf("%q escapes the workspace", p)
 	}
-	if runtime.GOOS == "windows" {
+	// The root itself: path.Clean leaves no other "." segment, and this
+	// one isn't a trailing-dot name.
+	if c == "." {
+		return c, nil
+	}
+	if windows {
 		for _, seg := range strings.Split(c, "/") {
 			if winAlias(seg) {
 				return "", fmt.Errorf("%q: Windows would read %q as another name (a stream, short name or trailing dot); use the file's real name", p, seg)
@@ -220,8 +229,13 @@ var shortName = regexp.MustCompile(`~[0-9]`)
 // Windows than it appears to: an alternate data stream (name:stream), an
 // 8.3 short name (GIT~1 for .git), or a name Windows trims (".git.").
 func winAlias(seg string) bool {
-	return strings.Contains(seg, ":") || shortName.MatchString(seg) || strings.TrimRight(seg, ". ") != seg
+	return strings.Contains(seg, ":") || shortName.MatchString(seg) || strings.TrimRight(seg, ". ") != seg || winDevice.MatchString(seg)
 }
+
+// winDevice matches the reserved device names (CON, NUL, COM1, ...), with
+// or without an extension: opening one reaches a device, not a file in the
+// workspace.
+var winDevice = regexp.MustCompile(`(?i)^(con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$`)
 
 // CanWrite reports whether rel may be modified.
 func (w *Workspace) CanWrite(rel string) error {
@@ -441,7 +455,7 @@ func (w *Workspace) List(rel string, depth, max int) ([]Entry, bool, error) {
 	}
 	err = fs.WalkDir(w.root.FS(), c, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			return skipUnreadable(p, c, d, err)
 		}
 		if p == c {
 			return nil
@@ -472,6 +486,19 @@ func (w *Workspace) List(rel string, depth, max int) ([]Entry, bool, error) {
 	return out, truncated, w.relErr(err)
 }
 
+// skipUnreadable handles an error during a walk from c: one unreadable
+// file or folder (a junction, a permission) is skipped instead of ending
+// the walk with nothing, but failing to read c itself is an error.
+func skipUnreadable(p, c string, d fs.DirEntry, err error) error {
+	if p == c {
+		return err
+	}
+	if d != nil && d.IsDir() {
+		return fs.SkipDir
+	}
+	return nil
+}
+
 // Match is one search hit.
 type Match struct {
 	Path string
@@ -494,7 +521,7 @@ func (w *Workspace) Search(pattern, rel, glob string, max int) ([]Match, bool, e
 	truncated := false
 	err = fs.WalkDir(w.root.FS(), c, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			return skipUnreadable(p, c, d, err)
 		}
 		if d.IsDir() {
 			if p != c && (skipDirs[d.Name()] || w.isHidden(p)) {

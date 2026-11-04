@@ -75,7 +75,11 @@ func wrap(cfg Config, argv []string) ([]string, error) {
 		}
 	}
 	// Credential files in the workspace read as empty.
-	for _, p := range secretFiles(cfg.Workspace) {
+	secrets, err := secretFiles(cfg.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range secrets {
 		args = append(args, "--ro-bind", "/dev/null", p)
 	}
 	args = append(args, "--bind", cfg.Scratch, cfg.Scratch)

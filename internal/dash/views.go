@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/dethmasque/ackn4th/internal/event"
+	"github.com/dethmasque/ackn4th/internal/spend"
 	"github.com/dethmasque/ackn4th/internal/task"
 )
 
@@ -150,7 +151,7 @@ func (m *model) footer() string {
 	case m.flash != "" && time.Since(m.flashAt) < 4*time.Second:
 		return fill(" "+pAmber("▸ ")+pText(m.flash), m.w, bg0)
 	}
-	keys := [][2]string{{"↑↓", "move"}, {"tab", "panel"}, {"←→", "agent"}, {"⏎", "zoom"}, {"e", "expand"}, {"c", "copy"}, {"1-4", "tabs"}, {"[ ]", "task"}, {"f", "follow"}, {"s", "stop"}, {"r", "resume"}, {"x", "delete"}, {"n", "new"}, {"p", "providers"}, {"R", "roles"}, {"t", "tour"}, {"?", "help"}, {"q", "quit"}}
+	keys := [][2]string{{"↑↓", "move"}, {"tab", "panel"}, {"←→", "agent"}, {"⏎", "zoom"}, {"e", "expand"}, {"c", "copy"}, {"1-4", "tabs"}, {"[ ]", "task"}, {"f", "follow"}, {"s", "stop"}, {"r", "resume"}, {"a", "follow-up"}, {"x", "delete"}, {"n", "new"}, {"p", "providers"}, {"R", "roles"}, {"C", "config"}, {"t", "tour"}, {"?", "help"}, {"q", "quit"}}
 	switch {
 	case m.open != nil && m.open.task:
 		keys = [][2]string{{"↑↓", "scroll"}, {"c", "copy it all"}, {"esc", "close"}}
@@ -406,6 +407,11 @@ func (m *model) overview(l *Live, w, h int) []string {
 		prompt = append(prompt, bold(pWhite(l))+more+hint)
 	}
 	out = append(out, mark(prompt)...)
+	if n := len(t.FollowUps); n > 0 {
+		f := t.FollowUps[n-1]
+		head := fmt.Sprintf("↪ follow-up %d, round %d: ", n, f.Round)
+		out = append(out, mark([]string{fgp(cyan)(head) + pText(ansi.Truncate(oneLine(f.Prompt), w-1-width(head), "…"))})...)
+	}
 	u := t.Usage()
 	stats := pill("TURNS", bg2, lime)
 	if t.Parallel() {
@@ -421,8 +427,15 @@ func (m *model) overview(l *Live, w, h int) []string {
 	if u.CachedTokens > 0 && u.InputTokens > 0 {
 		stats += pLime(fmt.Sprintf(" · ↯%d%% cached", u.CachedTokens*100/u.InputTokens))
 	}
+	stats += pDim(costLabel(t.Cost(), t.MaxCost))
 	out = append(out, "", stats)
-	out = append(out, pDim("in ")+pLime(t.Workspace)+pDim("  · updated "+ago(t.UpdatedAt)))
+	// Where the work is: with --repo it's a clone, not the directory the
+	// task was started from.
+	where := pDim("in ") + pLime(tildePath(t.Workspace))
+	if t.Branch != "" {
+		where += pDim(" on branch ") + pText(t.Branch)
+	}
+	out = append(out, where+pDim("  · updated "+ago(t.UpdatedAt)))
 	if t.Reason != "" && t.Status != task.Running {
 		// Up to three lines: provider errors carry the fix at the end.
 		col := pAmber
@@ -433,15 +446,16 @@ func (m *model) overview(l *Live, w, h int) []string {
 		if len(reason) > 3 {
 			reason = append(reason[:2], ansi.Truncate(reason[2], w-6, "")+" …")
 		}
-		for i, r := range reason {
+		for i, r := range markdown(reason, col) {
 			lead := "  "
 			if i == 0 {
 				lead = "▸ "
 			}
-			reason[i] = col(lead + r)
+			reason[i] = col(lead) + r
 		}
 		out = append(out, mark(reason)...)
 	}
+	out = append(out, m.changesNote(l, w-1)...)
 	if (t.Status == task.Failed || t.Status == task.Stopped) && m.opt.Resume != nil {
 		out = append(out, pDim("  press ")+pill("r", bg3, lime)+pDim(" to resume where it left off"))
 	}
@@ -549,11 +563,19 @@ func (m *model) workflow(l *Live, w int) []string {
 			votes += pFaint("◇")
 		}
 	}
-	rule := "every agent in the same round"
+	n := len(t.Agents)
+	rule := fmt.Sprintf("  %d/%d declared done this round · the task completes when all %d do in one round", l.Votes(), n, n)
 	if !t.Parallel() {
-		rule = "every agent in consecutive turns"
+		rule = fmt.Sprintf("  %d/%d declared done · the task completes when all %d do, one after another", l.Votes(), n, n)
 	}
-	return append(lines, votes+pDim(fmt.Sprintf("  %d/%d declared done · completes when %s", l.Votes(), len(t.Agents), rule)))
+	if n == 1 {
+		rule = "  the task completes when the agent declares done"
+	}
+	tally := votes + pDim(rule)
+	if t.SplitRounds >= 2 {
+		tally += pAmber(fmt.Sprintf(" · split for %d rounds", t.SplitRounds))
+	}
+	return append(lines, tally)
 }
 
 const cardRows = 8
@@ -581,12 +603,18 @@ func (m *model) card(l *Live, i, cw int) string {
 		if s := a.LiveSummary(); s != "" {
 			activity = fgp(pc)(s)
 		}
+	case l.Task.Parallel() && l.Task.Status == task.Running && spec.RoundDone >= l.Task.Round:
+		// In parallel, everyone finishes the round, then waits for the
+		// rest: that is what this agent is doing, whether or not it also
+		// voted the whole task done.
+		phase, activity = pill("✓ ROUND DONE", bg3, lime), pDim("waiting for teammates")
+		if a.Voted {
+			activity = pLime("◆ voted the task done") + pDim(" · waiting for teammates")
+		}
 	case a.Voted:
-		phase, activity = pill("◆ DONE", lime, bg0), pDim("declared the task done")
+		phase, activity = pill("◆ VOTED DONE", lime, bg0), pDim("says the whole task is done")
 	case i == l.Next():
 		phase, activity = pill("▸ UP NEXT", amber, bg0), pDim("waiting for the handoff")
-	case l.Task.Parallel() && l.Task.Status == task.Running && spec.RoundDone >= l.Task.Round:
-		phase, activity = pill("✓ ROUND DONE", bg3, lime), pDim("waiting for teammates")
 	default:
 		phase, activity = pill("○ IDLE", bg3, dim), pDim(fmt.Sprintf("%d turns so far", spec.Turns))
 	}
@@ -681,6 +709,8 @@ func (m *model) eventParts(l *Live, e event.Event) (lead, what string) {
 	switch e.Kind {
 	case event.TaskStarted:
 		what = pGreen("■ task " + e.Text)
+	case event.FollowUp:
+		what = bold(fgp(cyan)("↪ follow-up ")) + pText(oneLine(e.Text))
 	case event.RoundStarted:
 		what = bold(pGreen(fmt.Sprintf("━━━ ROUND %d ━━━", e.Round)))
 	case event.TurnStarted:
@@ -692,11 +722,11 @@ func (m *model) eventParts(l *Live, e event.Event) (lead, what string) {
 	case event.ToolResult:
 		what = pRed("│  ✗ " + e.Text)
 	case event.Message:
-		what = pLime("✉ ") + pText(oneLine(e.Text))
+		what = pLime("✉ ") + mdLine(oneLine(e.Text), pText)
 	case event.Reasoning:
-		what = fgp(violet)("∴ ") + pDim(oneLine(e.Text))
+		what = fgp(violet)("∴ ") + mdLine(oneLine(e.Text), pDim)
 	case event.DoneVote:
-		what = bold(pLime("◆ declared done ")) + pDim(oneLine(e.Text))
+		what = bold(pLime("◆ declared done ")) + mdLine(oneLine(e.Text), pDim)
 	case event.TurnEnded:
 		what = pMoss("╰─ ") + pDim(fmt.Sprintf("turn ended · %s in / %s out", tokens(e.InTok), tokens(e.OutTok)))
 		if e.CacheTok > 0 && e.InTok > 0 {
@@ -801,8 +831,8 @@ func (m *model) messages(l *Live, w, h int) []string {
 		spec := l.Task.Agents[e.Agent-1]
 		pc := providerColor(spec.Provider)
 		lines = append(lines, pill(fmt.Sprintf("ROUND %d", e.Round), bg2, dim)+" "+pill(spec.Role, mix(bg1, pc, 0.25), pc)+pFaint("  "+e.Time.Local().Format("Jan 2 15:04")))
-		for _, line := range wrap(e.Text, w-4) {
-			lines = append(lines, fgp(mix(bg1, pc, 0.6))("  ┃ ")+pText(line))
+		for _, line := range markdown(wrap(clean(e.Text), w-4), pText) {
+			lines = append(lines, fgp(mix(bg1, pc, 0.6))("  ┃ ")+line)
 		}
 		lines = append(lines, "")
 	}
@@ -895,7 +925,7 @@ func (m *model) agentDetail(l *Live, w int) []string {
 	if a.Phase != Idle {
 		now = pill(m.spin(spinner)+" "+strings.ToUpper(a.Phase.String()), green, bg0) + pDim(" for "+short(time.Since(a.Since))+" · ") + pText(a.Activity)
 	} else if a.Voted {
-		now = pill("◆ DONE", lime, bg0)
+		now = pill("◆ VOTED DONE", lime, bg0) + pDim(" says the whole task is done")
 	}
 	out = append(out, kv("now", now))
 	u := spec.Usage
@@ -903,6 +933,7 @@ func (m *model) agentDetail(l *Live, w int) []string {
 	if u.CachedTokens > 0 && u.InputTokens > 0 {
 		usage += pLime(fmt.Sprintf(" · ↯%d%% cached", u.CachedTokens*100/u.InputTokens))
 	}
+	usage += pDim(costLabel(spec.Cost, 0))
 	out = append(out, kv("usage", usage))
 	ctx := pText(tokens(a.Context))
 	if spec.CompactAt > 0 {
@@ -923,8 +954,8 @@ func (m *model) agentDetail(l *Live, w int) []string {
 	if a.Message == "" {
 		out = append(out, pDim("  none yet"))
 	}
-	for _, line := range wrap(a.Message, w-6) {
-		out = append(out, fgp(mix(bg1, pc, 0.6))("  ┃ ")+pText(line))
+	for _, line := range markdown(wrap(clean(a.Message), w-6), pText) {
+		out = append(out, fgp(mix(bg1, pc, 0.6))("  ┃ ")+line)
 	}
 	section("RECENT TOOLS")
 	if len(a.Recent) == 0 {
@@ -1078,8 +1109,10 @@ var helpRows = [][2]string{
 	{"pgup pgdn g G", "page · top · bottom (and follow)"},
 	{"f", "follow new activity on / off"},
 	{"s  r  x", "stop · resume · delete a task (each asks first)"},
+	{"a", "follow-up: more work for a finished task's team"},
 	{"n", "new task: agents, models, efforts and a prompt"},
 	{"p  R", "providers (sign in or out) · roles (add, edit, import)"},
+	{"C", "configuration: spending caps, limits, models, voice"},
 	{"e", "the task in full: prompt, why it stopped, to-dos"},
 	{"c", "copy what's selected, in full"},
 	{"drag", "select text to copy it · right-click copies a line"},
@@ -1092,7 +1125,9 @@ func helpBox(w, h int, voice bool) string {
 	rows := helpRows
 	if voice {
 		n := len(rows) - 1 // before q
-		rows = append(append(rows[:n:n], [2]string{"v  V", "voice: read the dashboard aloud on / off · repeat"}), rows[n])
+		rows = append(append(rows[:n:n],
+			[2]string{"v  V", "voice: read the dashboard aloud on / off · repeat"},
+			[2]string{"w  i  o", "voice: where you are · the selection · what to do · or F2 F3 F4"}), rows[n])
 	}
 	lines := []string{""}
 	for _, r := range rows {
@@ -1120,4 +1155,17 @@ func overlay(screen, block string, w int) string {
 		bg[y0+i] = ansi.Cut(row, 0, x0) + "\x1b[0m" + line + "\x1b[0m" + ansi.Cut(row, x0+bw, w)
 	}
 	return strings.Join(bg, "\n")
+}
+
+// costLabel is " · ≈$1.23" (of a cap, if any): estimated spending on
+// billed providers. Nothing when nothing was spent.
+func costLabel(usd, capUSD float64) string {
+	if usd <= 0 && capUSD <= 0 {
+		return ""
+	}
+	s := " · ≈" + spend.USD(usd)
+	if capUSD > 0 {
+		s += " of " + spend.USD(capUSD)
+	}
+	return s
 }

@@ -3,6 +3,7 @@ package clis
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -114,7 +115,8 @@ func TestCursorCommandWritesPrivateConfig(t *testing.T) {
 	}
 	for _, f := range []string{"mcp.json", "cli.json"} {
 		fi, err := os.Stat(filepath.Join(run, ".cursor", f))
-		if err != nil || fi.Mode().Perm() != 0o600 {
+		// Windows has no mode bits: the files get the run directory's ACL.
+		if err != nil || runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 			t.Errorf("%s: %v %v", f, err, fi)
 		}
 	}

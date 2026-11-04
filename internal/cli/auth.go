@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -33,7 +31,7 @@ func loginCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "login",
 		GroupID: "session",
-		Short:   "Sign in to AI providers (for 24 hours at most)",
+		Short:   "Sign in to AI providers",
 		Long: `Sign in to AI providers. ackn4th has no accounts of its own: agents use
 the providers' credentials. With no --provider, on a terminal, it lists
 every provider and asks which to sign in to.
@@ -54,13 +52,14 @@ Gemini, by default, uses an API key from Google AI Studio
 (` + auth.GeminiKeyURL + `): sign in with your Google account, create a
 key, paste it when asked. No Google Cloud project needed, and there's a free
 tier. The key is stored only in your OS keychain, never in a file, flag or
-environment variable, and is used only while you're signed in.
+environment variable.
 If you use Google Cloud, --gcp-project switches Gemini to Vertex AI with
 short-lived OAuth through ` + "`gcloud`" + ` instead.
 
-Signing in lasts session_ttl, capped at 24h, checked before every model
-request. When it runs out, running tasks stop (resumably) and OAuth grants
-are revoked, so the next ` + "`ackn4th login`" + ` starts with a fresh sign-in. ` + "`ackn4th logout`" + ` also deletes the API keys.`,
+A provider stays signed in until you sign out: ` + "`ackn4th logout`" + ` revokes
+the OAuth grants and deletes the API keys, and running tasks stop at their
+next request (resumably). Signing in again to a provider that's already
+signed in just checks it still works.`,
 		Example: `  ackn4th login                                              # pick from a list
   ackn4th login --provider codex --provider claude-code      # your ChatGPT and Claude plans
   ackn4th login --provider claude
@@ -94,7 +93,7 @@ are revoked, so the next ` + "`ackn4th login`" + ` starts with a fresh sign-in. 
 	return cmd
 }
 
-// login signs in to providers and starts a session.
+// login signs in to providers and checks each one works.
 func login(cmd *cobra.Command, a *app, providers []string, reauth bool, gcpProject string) error {
 	t := a.term
 	t.Banner()
@@ -122,8 +121,8 @@ func login(cmd *cobra.Command, a *app, providers []string, reauth bool, gcpProje
 		}
 	}
 	if len(sel) == 0 {
-		// Non-interactive: renew the session for every provider that is
-		// already signed in. Nobody is there for a browser or a key.
+		// Non-interactive: check every provider that is already signed
+		// in. Nobody is there for a browser or a key.
 		sel = signedIn()
 		if len(sel) == 0 {
 			return errors.New("no provider is signed in yet: sign in once on a terminal, or name one with --provider (API keys can be piped on stdin)")
@@ -139,15 +138,6 @@ func login(cmd *cobra.Command, a *app, providers []string, reauth bool, gcpProje
 			return err
 		}
 	}
-	// With prefer_cli, defaults may resolve to a provider's CLI, so a
-	// signed-in CLI joins the session alongside its API provider.
-	if a.cfg.PreferCLI {
-		for _, p := range slices.Clone(sel) {
-			if cli, ok := cliProviders[p]; ok && !slices.Contains(sel, cli) && cliSignedIn(cli) {
-				sel = append(sel, cli)
-			}
-		}
-	}
 	var verified []string
 	for _, p := range sel {
 		if err := loginProvider(cmd.Context(), a, p, reauth); err != nil {
@@ -156,52 +146,27 @@ func login(cmd *cobra.Command, a *app, providers []string, reauth bool, gcpProje
 		}
 		verified = append(verified, p)
 	}
-	// Providers verified earlier in a still-live session stay usable.
-	if prev, err := auth.Require(); err == nil {
-		for _, p := range prev.Providers {
-			if !slices.Contains(verified, p) && !slices.Contains(sel, p) {
-				verified = append(verified, p)
-			}
-		}
-	}
+	// Older versions kept a record of who was signed in until when: it
+	// means nothing now.
+	auth.ForgetOldSignIn()
 	if len(verified) == 0 {
-		return errors.New("no provider authorized; nothing to log in with")
-	}
-	name := "unknown"
-	if u, err := user.Current(); err == nil {
-		name = u.Username
-	}
-	s, err := auth.StartSession(name, verified, a.cfg.SessionTTL)
-	if err != nil {
-		return fmt.Errorf("save the sign-in to the keychain: %w", err)
+		return errors.New("no provider could be signed in")
 	}
 	t.Println()
 	t.Rain(6, 900*time.Millisecond)
 	t.Decode("  ▓▒░  ACCESS GRANTED  ░▒▓", func(s string) string { return t.Bold(t.Lime(s)) })
 	t.Println()
-	sessionBox(a, s)
-	grantsBox(cmd.Context(), a)
-	a.tip("logged-in", "you're signed in for "+strings.TrimSuffix(strings.TrimSuffix(a.cfg.SessionTTL.String(), "0s"), "0m")+". `cd` into a project and run `ackn4th` for the dashboard, or `ackn4th start-task \"Add a /health endpoint\"` straight from the shell.")
+	signedInBox(cmd.Context(), a)
+	a.tip("logged-in", "you're signed in until you run `ackn4th logout`. `cd` into a project and run `ackn4th` for the dashboard, or `ackn4th start-task \"Add a /health endpoint\"` straight from the shell.")
 	return nil
 }
 
-// signedIn lists the providers that can join a session without asking
-// anything: a stored grant or key, or a signed-in CLI.
+// signedIn lists the providers that are signed in: a stored grant or
+// key, or a signed-in CLI.
 func signedIn() []string {
 	var out []string
 	for _, p := range auth.Providers {
-		ok := false
-		switch p {
-		case "claude":
-			ok = auth.HasGrant(p)
-		case "gemini":
-			ok = auth.HasGeminiKey() || auth.HasGrant(p)
-		case "openai":
-			ok = auth.HasOpenAIKey()
-		default:
-			ok = cliSignedIn(p)
-		}
-		if ok {
+		if auth.SignedIn(p) {
 			out = append(out, p)
 		}
 	}
@@ -419,29 +384,13 @@ func askKey(a *app, prov, title string, steps []string, save func(string) error)
 	return save(key)
 }
 
-func sessionBox(a *app, s *auth.Session) {
-	t := a.term
-	left := s.Remaining()
-	frac := float64(left) / float64(s.ExpiresAt.Sub(s.CreatedAt))
-	var provs []string
-	for _, p := range auth.Providers {
-		mark := t.Gray("· " + p)
-		if s.Has(p) {
-			mark = t.ProviderColor(p, "● "+p)
-		}
-		provs = append(provs, mark)
-	}
-	t.Box("SIGNED IN", t.KV(
-		[2]string{"providers", strings.Join(provs, "  ")},
-		[2]string{"expires", s.ExpiresAt.Local().Format("Mon 15:04 MST") + t.Gray("  · then grants are revoked")},
-		[2]string{"remaining", t.Gauge(frac, 24) + " " + ui.Duration(left.Round(time.Minute))},
-	))
-}
-
-// grantsBox shows each provider's OAuth grant and access-token lifetime.
-func grantsBox(ctx context.Context, a *app) {
+// signedInBox shows each provider's sign-in: its OAuth grant and
+// access-token lifetime, its API key, or its CLI's login. It reports how
+// many are signed in.
+func signedInBox(ctx context.Context, a *app) int {
 	t := a.term
 	var lines []string
+	n := 0
 	for _, p := range auth.Providers {
 		name := t.ProviderColor(p, fmt.Sprintf("%-11s", p))
 		gctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -455,7 +404,7 @@ func grantsBox(ctx context.Context, a *app) {
 		if g.External {
 			token = t.Green("signed in ") + t.Gray("· "+g.Source+"; ackn4th stores nothing")
 		} else if g.APIKey {
-			token = t.Green("API key ") + t.Gray("in "+g.Source+" · used only while signed in")
+			token = t.Green("API key ") + t.Gray("in "+g.Source+" · ackn4th logout deletes it")
 		} else if !g.TokenExpiry.IsZero() {
 			if left := time.Until(g.TokenExpiry); left > 0 {
 				token = t.Green("access token ") + t.Gray("expires in "+ui.Duration(left.Round(time.Minute))+", auto-refreshes")
@@ -463,12 +412,14 @@ func grantsBox(ctx context.Context, a *app) {
 				token = t.Amber("access token expired") + t.Gray(" · refreshes on next request")
 			}
 		}
+		n++
 		lines = append(lines, t.Green("✓ ")+name+" "+token)
 		if g.Account != "" {
 			lines = append(lines, "              "+t.Gray(g.Account))
 		}
 	}
-	t.Box("CREDENTIALS", lines)
+	t.Box("SIGNED IN", lines)
+	return n
 }
 
 func logoutCmd(a *app) *cobra.Command {
@@ -483,12 +434,14 @@ Gemini's Vertex AI refresh token (if any) is revoked with Google, and
 Claude's tokens are deleted (its refresh token also expires server-side).
 
 With --provider, do that for the named providers only; the rest stay
-signed in.
+signed in. Running tasks that use a provider you sign out of stop at their
+next request, resumably.
 
-Your everyday ant and gcloud logins are not affected, and agent CLIs
-(Claude Code, Codex, Cursor, Copilot) stay signed in to their own logins:
-ackn4th only stops using them. The API keys themselves stay valid at Google
-and OpenAI; delete them there if you're done with them.`,
+Your everyday ant and gcloud logins are not affected. ackn4th holds nothing
+for the agent CLIs (Claude Code, Codex, Cursor, Copilot): they keep their
+own logins, which you sign out of in the CLI itself. The API keys
+themselves stay valid at Google and OpenAI; delete them there if you're
+done with them.`,
 		Example: `  ackn4th logout
   ackn4th logout --provider gemini
   ackn4th logout --provider openai --provider codex`,
@@ -500,29 +453,16 @@ and OpenAI; delete them there if you're done with them.`,
 					return fmt.Errorf("unknown provider %q: one of %s", p, strings.Join(auth.Providers, ", "))
 				}
 			}
-			before, _ := auth.Current()
+			auth.ForgetOldSignIn()
 			provs := only
 			if len(provs) == 0 {
-				if err := auth.EndSession(); err != nil {
-					return err
-				}
-				t.Println(t.Green("✓ "), "signed out of every provider")
 				provs = auth.Providers
 			}
 			for _, p := range provs {
-				if len(only) > 0 {
-					if err := auth.DropProvider(p); err != nil {
-						return err
-					}
-				}
 				forgetProvider(a, p)
 			}
-			if len(only) > 0 && before != nil {
-				if s, err := auth.Current(); err == nil && s.Remaining() > 0 {
-					t.Println(t.Gray("· still signed in: " + strings.Join(s.Providers, ", ")))
-				} else if err == nil || errors.Is(err, auth.ErrNoSession) {
-					t.Println(t.Green("✓ "), "no provider is signed in now")
-				}
+			if len(only) == 0 {
+				t.Println(t.Green("✓ "), "ackn4th holds no credentials now")
 			}
 			return nil
 		},
@@ -536,11 +476,8 @@ func forgetProvider(a *app, p string) {
 	t := a.term
 	name := t.ProviderColor(p, p)
 	switch {
-	case p == claudecode.Name:
-		t.Println(t.Green("✓ "), name, t.Gray(" no longer used · Claude Code stays signed in (`claude auth logout` signs it out)"))
-		return
-	case auth.CLIDriver(p) != nil:
-		t.Println(t.Green("✓ "), name, t.Gray(" no longer used · "+p+" stays signed in to its own login"))
+	case p == claudecode.Name || auth.CLIDriver(p) != nil:
+		t.Println(t.Gray("· "), name, t.Gray(" "+cliLogin(p)))
 		return
 	}
 	revoked, keyErr := forget(p)
@@ -569,17 +506,29 @@ func forget(p string) (revokeErr, keyErr error) {
 	return revokeErr, keyErr
 }
 
-// signOut takes providers out of the session and deletes what ackn4th
-// holds for them, quietly: the dashboard's sign-out.
+// cliLogin says how an agent CLI's own login is signed out.
+func cliLogin(p string) string {
+	how := "sign out in " + auth.Tools[p].Name + " itself"
+	if p == claudecode.Name {
+		how = "`claude auth logout` signs it out"
+	}
+	return "keeps its own login, and ackn4th holds nothing for it: " + how
+}
+
+// signOut deletes what ackn4th holds for providers, quietly: the
+// dashboard's sign-out. An agent CLI's own login can't be signed out from
+// here, so asking for one says so.
 func signOut(providers []string) error {
 	var errs []error
 	for _, p := range providers {
-		if err := auth.DropProvider(p); err != nil {
-			return err
+		if p == claudecode.Name || auth.CLIDriver(p) != nil {
+			errs = append(errs, fmt.Errorf("%s %s", p, cliLogin(p)))
+			continue
 		}
 		r, k := forget(p)
 		errs = append(errs, r, k)
 	}
+	auth.ForgetOldSignIn()
 	return errors.Join(errs...)
 }
 
@@ -591,21 +540,10 @@ func statusCmd(a *app) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			t := a.term
 			t.Banner()
-			s, err := auth.Current()
-			switch {
-			case errors.Is(err, auth.ErrNoSession):
-				t.Box("SIGNED IN", []string{t.Amber("no provider yet") + t.Gray("  run ") + t.Lime("ackn4th login")})
+			if signedInBox(cmd.Context(), a) == 0 {
+				t.Println(t.Amber("  no provider is signed in yet"), t.Gray(" run "), t.Lime("ackn4th login"))
 				a.tip("status-login", "`ackn4th login` asks which provider to sign in to. No API credits? Pick claude-code to use your Claude plan through a local Claude Code.")
-			case err != nil:
-				return err
-			case s.Remaining() <= 0:
-				// Require deletes the session and revokes the grants.
-				auth.Require()
-				t.Box("SIGNED IN", []string{t.Red("sign-ins expired "+ui.Ago(s.ExpiresAt)) + t.Gray(" · grants revoked · run ") + t.Lime("ackn4th login")})
-			default:
-				sessionBox(a, s)
 			}
-			grantsBox(cmd.Context(), a)
 
 			roots, _ := a.cfg.AllowedRoots()
 			var rl []string

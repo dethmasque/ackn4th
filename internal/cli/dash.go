@@ -18,8 +18,10 @@ import (
 	"github.com/dethmasque/ackn4th/internal/auth"
 	"github.com/dethmasque/ackn4th/internal/config"
 	"github.com/dethmasque/ackn4th/internal/dash"
+	"github.com/dethmasque/ackn4th/internal/event"
 	"github.com/dethmasque/ackn4th/internal/github"
 	"github.com/dethmasque/ackn4th/internal/provider/claudecode"
+	"github.com/dethmasque/ackn4th/internal/provider/openai"
 	"github.com/dethmasque/ackn4th/internal/role"
 	"github.com/dethmasque/ackn4th/internal/task"
 	"github.com/dethmasque/ackn4th/internal/voice"
@@ -134,6 +136,12 @@ func (a *app) dashOptions(ctx context.Context, focus string, speak *bool) (dash.
 			v.On = *speak
 		}
 	}
+	// A first run, with no tasks yet, opens on the configuration.
+	firstRun := false
+	if a.store != nil {
+		tasks, _ := a.store.List()
+		firstRun = len(tasks) == 0
+	}
 	opt := dash.Options{
 		Store:   a.store,
 		Focus:   focus,
@@ -141,18 +149,26 @@ func (a *app) dashOptions(ctx context.Context, focus string, speak *bool) (dash.
 		Stop: func(tk *task.Task) error {
 			return task.Signal(tk.PID)
 		},
-		Resume: a.resumeBackground,
-		Delete: func(tk *task.Task) error { return a.store.Delete(tk.ID) },
-		Launch: func(req dash.NewTask) (string, error) { return a.dashLaunch(ctx, req) },
-		Login:  loginCommand,
-		Setup:  a.dashSetup(),
-		Voice:  v,
+		Resume:   a.resumeBackground,
+		Delete:   func(tk *task.Task) error { return a.store.Delete(tk.ID) },
+		FollowUp: a.followUpBackground,
+		Launch:   func(req dash.NewTask) (string, error) { return a.dashLaunch(ctx, req) },
+		Login:    loginCommand,
+		Setup:    a.dashSetup(),
+		Voice:    v,
 
 		RoleAdmin: a.dashRoles(ctx),
+		Settings:  a.dashSettings(firstRun),
 		Tips:      a.tips,
 		DisableTips: func() error {
 			_, err := config.SetKey("tips", false)
 			return err
+		},
+		RepoDir: a.repoDir,
+		Uncommitted: func(dir string) (int, error) {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			return github.Uncommitted(ctx, dir)
 		},
 		Trusted: func(dir string) bool {
 			allowed, err := a.cfg.AllowedRoots()
@@ -242,11 +258,10 @@ func (a *app) dashVoice(ctx context.Context) *dash.Voice {
 }
 
 // dashSetup is the dashboard's provider-setup screen. It is offered on
-// open while nobody is signed in, until the user answers it once.
+// open while no provider is signed in, until the user answers it once.
 func (a *app) dashSetup() *dash.Setup {
-	_, err := auth.Require()
 	return &dash.Setup{
-		Offer:  err != nil && !a.tips.Seen(setupOffered),
+		Offer:  !a.tips.Seen(setupOffered) && !anySignedIn(),
 		Status: a.providerStates,
 		Logout: signOut,
 		Done:   func() { a.tips.Mark(setupOffered) },
@@ -256,21 +271,20 @@ func (a *app) dashSetup() *dash.Setup {
 // providerStates checks every provider at once; the CLIs each take a
 // moment to answer.
 func (a *app) providerStates() []dash.ProviderState {
-	sess, _ := auth.Require()
 	out := make([]dash.ProviderState, len(auth.Providers))
 	var wg sync.WaitGroup
 	for i, p := range auth.Providers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			out[i] = a.providerState(p, sess)
+			out[i] = a.providerState(p)
 		}()
 	}
 	wg.Wait()
 	return out
 }
 
-func (a *app) providerState(p string, sess *auth.Session) dash.ProviderState {
+func (a *app) providerState(p string) dash.ProviderState {
 	st := dash.ProviderState{Name: p, Note: providerNotes[p]}
 	if err := a.missingTool(p); err != nil {
 		st.Missing, st.Hint = true, auth.Tools[p].Install
@@ -293,13 +307,11 @@ func (a *app) providerState(p string, sess *auth.Session) dash.ProviderState {
 		}
 	}
 	switch {
-	case signedIn && sess != nil && sess.Has(p):
+	case signedIn:
 		st.Ready = true
 		if st.Detail == "" {
 			st.Detail = "ready"
 		}
-	case signedIn:
-		st.Detail = "signed in · enter starts using it"
 	case p == "openai":
 		st.Detail = "needs an API key"
 	case p == "gemini" && a.cfg.Providers["gemini"].GeminiAuth() == config.GeminiKey:
@@ -308,6 +320,21 @@ func (a *app) providerState(p string, sess *auth.Session) dash.ProviderState {
 		st.Detail = "needs sign-in"
 	}
 	return st
+}
+
+// anySignedIn reports whether some provider is signed in, asking them all
+// at once.
+func anySignedIn() bool {
+	ok := make(chan bool, len(auth.Providers))
+	for _, p := range auth.Providers {
+		go func() { ok <- auth.SignedIn(p) }()
+	}
+	for range auth.Providers {
+		if <-ok {
+			return true
+		}
+	}
+	return false
 }
 
 // formChoices fills in what the dashboard's new-task form offers.
@@ -335,10 +362,14 @@ func (a *app) formChoices(opt *dash.Options) error {
 				models = append(models, prof.Model)
 			}
 		}
-		opt.Providers = append(opt.Providers, dash.ProviderChoice{
+		choice := dash.ProviderChoice{
 			Name: name, Note: providerNotes[name],
 			Models: uniq(models), Efforts: config.Efforts, DefaultEffort: "",
-		})
+		}
+		if name == openai.Name && p.Model == "" {
+			choice.AutoModel = "newest your key can use"
+		}
+		opt.Providers = append(opt.Providers, choice)
 	}
 	cwd, _ := os.Getwd()
 	def := a.preferCLI(a.cfg.DefaultProvider)
@@ -348,6 +379,7 @@ func (a *app) formChoices(opt *dash.Options) error {
 	opt.Defaults = dash.FormDefaults{
 		Workspace: tildeHome(cwd),
 		Rounds:    a.cfg.Limits.MaxRounds,
+		MaxCost:   a.cfg.Spend.PerTask,
 		Provider:  def,
 		Roles:     []string{"backend_dev", "code_reviewer"},
 	}
@@ -361,6 +393,7 @@ var cliModels = map[string][]string{
 	"codex":   {"gpt-5.3-codex", "gpt-5.2"},
 	"cursor":  {"composer-2.5", "gpt-5.3-codex", "claude-opus-5-thinking-high", "gpt-5.2"},
 	"copilot": {"claude-sonnet-5-5", "gpt-5.2"},
+	"openai":  {"gpt-5.2", "gpt-5-mini"},
 }
 
 var claudeModels = []string{"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"}
@@ -430,13 +463,13 @@ func (a *app) dashLaunch(ctx context.Context, req dash.NewTask) (string, error) 
 			return "", fmt.Errorf("draft PR: %w", err)
 		}
 	}
-	if err := a.dashSession(provs); err != nil {
+	if err := a.dashSignedIn(provs); err != nil {
 		return "", err
 	}
 	if err := a.preflight(ctx, agents, false); err != nil {
 		return "", err
 	}
-	tk := &task.Task{ID: task.NewID(), Name: cmp.Or(req.Name, task.DefaultName(req.Prompt)), Prompt: req.Prompt, Workspace: resolved, Agents: agents, MaxRounds: req.Rounds, DraftPR: req.DraftPR, Branch: req.Branch}
+	tk := &task.Task{ID: task.NewID(), Name: cmp.Or(req.Name, task.DefaultName(req.Prompt)), Prompt: req.Prompt, Workspace: resolved, Agents: agents, MaxRounds: req.Rounds, MaxCost: req.MaxCost, DraftPR: req.DraftPR, Branch: req.Branch}
 	if req.Parallel {
 		tk.Mode = task.ModeParallel
 	}
@@ -453,10 +486,10 @@ func (a *app) dashLaunch(ctx context.Context, req dash.NewTask) (string, error) 
 	return tk.ID, nil
 }
 
-// dashSession is requireSession for the dashboard: when signing in would
+// dashSignedIn is requireSignedIn for the dashboard: when signing in would
 // fix it, it returns *dash.LoginRequired so the dashboard can offer that.
-func (a *app) dashSession(provs []string) error {
-	err := a.requireSession(provs...)
+func (a *app) dashSignedIn(provs []string) error {
+	err := a.requireSignedIn(provs...)
 	if err == nil {
 		return nil
 	}
@@ -513,6 +546,94 @@ func tildeHome(dir string) string {
 // resumeBackground resumes a stopped task in a background runner, for the
 // dashboard, first moving its agents to prov unless that is empty. It
 // checks what resume-task would, without asking anything.
+// followUpBackground gives tk a follow-up and starts it in the
+// background, for the dashboard.
+func (a *app) followUpBackground(tk *task.Task, prompt string, team []dash.NewAgent) error {
+	tk, err := a.store.Load(tk.ID) // the dashboard's copy is for showing
+	if err != nil {
+		return err
+	}
+	a.store.Reconcile(tk)
+	// Sign-ins first: if one is needed, the dashboard retries afterwards,
+	// and the follow-up must not have been added twice.
+	if err := a.dashSignedIn(taskProviders(tk, nil)); err != nil {
+		return err
+	}
+	if err := tk.AddFollowUp(prompt, -1, time.Now()); err != nil {
+		return err
+	}
+	if err := a.changeTeam(tk, team); err != nil {
+		return err
+	}
+	if err := a.store.Save(tk); err != nil {
+		return err
+	}
+	_, err = a.store.Spawn(tk.ID)
+	return err
+}
+
+// changeTeam gives tk's agents the roles, models and efforts in team (one
+// entry per agent, providers unchanged), and records what changed on the
+// latest follow-up so every agent is told. A new role or effort keeps the
+// agent's conversation; a new model starts it fresh (a conversation can't
+// always move between models), with the workspace, notes and the task's
+// history carried over.
+func (a *app) changeTeam(tk *task.Task, team []dash.NewAgent) error {
+	if team == nil {
+		return nil
+	}
+	if len(team) != len(tk.Agents) {
+		return fmt.Errorf("task %s has %d agents, not %d", tk.Label(), len(tk.Agents), len(team))
+	}
+	reg, err := a.roles()
+	if err != nil {
+		return err
+	}
+	effort := func(e string) string {
+		if e == "" {
+			return "default"
+		}
+		return e
+	}
+	var changes []string
+	for i, n := range team {
+		old := tk.Agents[i]
+		if n.Provider != "" && n.Provider != old.Provider {
+			return fmt.Errorf("agent %d: a follow-up keeps each agent's provider (%s); resume-task --provider moves agents", i+1, old.Provider)
+		}
+		for _, r := range strings.Split(n.Role, "+") {
+			if _, err := reg.Get(r); err != nil {
+				return fmt.Errorf("agent %d: %w", i+1, err)
+			}
+		}
+		var what []string
+		if n.Role != old.Role {
+			what = append(what, fmt.Sprintf("is now %s (was %s)", n.Role, old.Role))
+		}
+		if n.Model != old.Model {
+			what = append(what, fmt.Sprintf("runs on model %s (was %s), starting a fresh conversation", n.Model, old.Model))
+			if err := a.store.Switch(tk, i, old.Provider, n.Model, n.Effort); err != nil {
+				return err
+			}
+		}
+		if n.Effort != old.Effort {
+			what = append(what, fmt.Sprintf("uses %s effort (was %s)", effort(n.Effort), effort(old.Effort)))
+		}
+		if len(what) == 0 {
+			continue
+		}
+		tk.Agents[i].Role, tk.Agents[i].Effort = n.Role, n.Effort
+		changes = append(changes, fmt.Sprintf("agent %d %s", i+1, strings.Join(what, ", ")))
+	}
+	if len(changes) == 0 {
+		return nil
+	}
+	f := &tk.FollowUps[len(tk.FollowUps)-1]
+	f.Changes = changes
+	a.store.AppendEvent(tk.ID, event.Event{Kind: event.Notice, Time: time.Now(), Round: tk.Round, Text: "team changed: " + strings.Join(changes, "; ")})
+	return nil
+}
+
 func (a *app) resumeBackground(tk *task.Task, prov string) error {
 	tk, err := a.store.Load(tk.ID) // the dashboard's copy is for showing
 	if err != nil {
@@ -529,7 +650,7 @@ func (a *app) resumeBackground(tk *task.Task, prov string) error {
 	if err != nil {
 		return err
 	}
-	if err := a.dashSession(taskProviders(tk, moves)); err != nil {
+	if err := a.dashSignedIn(taskProviders(tk, moves)); err != nil {
 		return err
 	}
 	if err := a.applySwitch(tk, moves); err != nil {

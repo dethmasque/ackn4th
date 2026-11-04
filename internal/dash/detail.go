@@ -205,8 +205,8 @@ func block(s string, w int, style func(string) string) []string {
 // w cells.
 func prose(s string, w int, style func(string) string) []string {
 	var out []string
-	for _, l := range wrap(clean(s), w) {
-		out = append(out, "  "+style(l))
+	for _, l := range markdown(wrap(clean(s), w), style) {
+		out = append(out, "  "+l)
 	}
 	return out
 }
@@ -296,18 +296,12 @@ func (m *model) detailBody(l *Live, at, inner int) (string, []string) {
 			section("RESULT", amber)
 			dim("not back yet: the tool is still running")
 		case evs[result].Error:
-			r := evs[result]
 			title += " · FAILED"
-			section("RESULT · ✗ "+r.Text, red)
-			if r.Detail != "" {
-				text(r.Detail)
-			}
+			section("RESULT · ✗ failed", red)
+			resultText(evs[result], text)
 		default:
-			r := evs[result]
-			section("RESULT · ✓ "+r.Text, green)
-			if r.Detail != "" {
-				text(r.Detail)
-			}
+			section("RESULT · ✓", green)
+			resultText(evs[result], text)
 		}
 		if call >= 0 && evs[call].Detail == "" && (result < 0 || evs[result].Detail == "") {
 			gap()
@@ -348,6 +342,12 @@ func (m *model) taskBody(l *Live, inner int) []string {
 	section := func(label string, c rgb) { out = append(out, " "+bold(fgp(c)(label))) }
 	section("PROMPT", lime)
 	out = append(out, prose(t.Prompt, inner, pText)...)
+	for i, f := range t.FollowUps {
+		out = append(out, "")
+		section(fmt.Sprintf("FOLLOW-UP %d · round %d", i+1, f.Round), cyan)
+		out = append(out, prose(f.Prompt, inner, pText)...)
+	}
+	out = append(out, "", " "+bold(pLime("WORKSPACE"))+"  "+pText(tildePath(t.Workspace)))
 	if t.Reason != "" {
 		label, c := "WHY IT STOPPED", amber
 		switch t.Status {
@@ -401,19 +401,30 @@ func (m *model) whereDetail() string {
 	if m.open.at >= len(l.Events) {
 		return ""
 	}
-	title, body := m.detailBody(l, m.open.at, 200)
+	title, _ := m.detailBody(l, m.open.at, 200)
+	return "Details: " + strings.ToLower(title) + ", " + m.spokenEvent(l, l.Events[m.open.at], true) + " " +
+		m.detailSpoken(l, m.open.at, 6) + " Up and down scroll, left and right move between events, escape closes."
+}
+
+// detailSpoken is the details panel's text for the voice, at most n
+// lines of it (n < 0: all). A turn's token line, which spokenEvent
+// already says in words, is left out.
+func (m *model) detailSpoken(l *Live, at, n int) string {
+	if l.Events[at].Kind == event.TurnEnded {
+		return ""
+	}
+	_, body := m.detailBody(l, at, 200)
 	var b strings.Builder
-	b.WriteString("Details: " + strings.ToLower(title) + ". ")
 	for i, line := range body {
-		if i == 6 {
+		if i == n {
 			b.WriteString("… ")
 			break
 		}
 		if t := strings.TrimSpace(ansi.Strip(line)); t != "" {
-			b.WriteString(t + ". ")
+			b.WriteString(strings.TrimSuffix(t, ".") + ". ")
 		}
 	}
-	return b.String() + "Up and down scroll, left and right move between events, escape closes."
+	return strings.TrimSpace(b.String())
 }
 
 // tildePath shortens a path in the home directory to ~/….
@@ -424,4 +435,16 @@ func tildePath(p string) string {
 		}
 	}
 	return p
+}
+
+// resultText writes a tool's result in full, wrapped: its summary, then
+// what the model got back when that says more.
+func resultText(r event.Event, text func(string)) {
+	sum := strings.TrimSpace(r.Text)
+	if sum != "" && !strings.HasPrefix(strings.Join(strings.Fields(r.Detail), " "), strings.TrimSuffix(sum, "…")) {
+		text(sum)
+	}
+	if r.Detail != "" {
+		text(r.Detail)
+	}
 }

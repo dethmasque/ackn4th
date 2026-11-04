@@ -105,3 +105,8 @@ func ancestors(paths []string) []string {
 	}
 	return out
 }
+
+// sbQuote quotes s for a Seatbelt profile string.
+func sbQuote(s string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
+}

@@ -27,6 +27,7 @@ import (
 	"github.com/dethmasque/ackn4th/internal/provider/openai"
 	"github.com/dethmasque/ackn4th/internal/role"
 	"github.com/dethmasque/ackn4th/internal/sandbox"
+	"github.com/dethmasque/ackn4th/internal/spend"
 	"github.com/dethmasque/ackn4th/internal/task"
 	"github.com/dethmasque/ackn4th/internal/tips"
 	"github.com/dethmasque/ackn4th/internal/tools"
@@ -58,6 +59,8 @@ type app struct {
 	bannerShown bool
 	// tips records which first-run hints the user has seen.
 	tips *tips.Book
+	// ledger records spending for every runner, in the data dir.
+	ledger *spend.Ledger
 }
 
 func (a *app) load() error {
@@ -72,6 +75,7 @@ func (a *app) load() error {
 		return err
 	}
 	a.store = task.NewStore(data)
+	a.ledger = &spend.Ledger{Dir: filepath.Join(data, "spend")}
 	a.tips = tips.Load(data, cfg.Tips)
 	return nil
 }
@@ -90,6 +94,11 @@ func (a *app) newProvider(name string) (provider.Provider, error) {
 		return nil, fmt.Errorf("unknown provider %q (supported: %s)", name, providerNames())
 	}
 	p, err := a.cfg.ResolveAgent("", config.AgentProfile{Provider: name})
+	if errors.Is(err, config.ErrNoModel) && name == openai.Name {
+		// Signing in picks the model (chooseOpenAIModel), so it can't
+		// need one first.
+		err = nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -180,9 +189,15 @@ func (a *app) runner() (*task.Runner, error) {
 		Store: a.store, Roles: roles, NewProvider: a.providerFor, AllowedRoots: allowed,
 		Commands: cmds, Hide: hide,
 		MaxSteps: a.cfg.Limits.MaxStepsPerTurn, MaxFileBytes: a.cfg.Limits.MaxFileBytes,
-		// Re-checked before every model request, so a long or background
-		// run stops when the session expires instead of outliving it.
-		Authorize: func(p string) error { return a.requireSession(p) },
+		// Checked before every model request, so signing out of a
+		// provider stops the tasks using it.
+		Authorize: func(p string) error {
+			if p == "mock" {
+				return nil
+			}
+			return auth.StillHeld(p)
+		},
+		Spend: &spend.Policy{Limits: a.cfg.Spend, Ledger: a.ledger},
 	}
 	r.Completed = a.completed(r)
 	return r, nil
@@ -210,16 +225,11 @@ func (a *app) commandPolicy() (*tools.CommandPolicy, []string, error) {
 	return &tools.CommandPolicy{Network: c.Network, Timeout: c.Timeout}, []string{cfgDir, dataDir}, nil
 }
 
-// requireSession fails unless the user has a live login covering
-// providers. The sandbox's mock provider needs no login, so a task that
-// uses only mock agents needs no session at all.
-func (a *app) requireSession(providers ...string) error {
+// requireSignedIn fails unless every provider is signed in, naming each
+// one that isn't. The sandbox's mock provider needs no sign-in.
+func (a *app) requireSignedIn(providers ...string) error {
 	real := slices.DeleteFunc(slices.Clone(providers), func(p string) bool { return p == "mock" })
-	if len(providers) > 0 && len(real) == 0 {
-		return nil
-	}
-	_, err := auth.Require(real...)
-	return err
+	return auth.Require(real...)
 }
 
 // validProvider reports whether name can power an agent here: any real
@@ -279,11 +289,11 @@ your own accounts and under each provider's terms. MIT licensed, no warranty.`,
 	// Help lists commands in this order: the order you'd use them in.
 	cobra.EnableCommandSorting = false
 	root.AddCommand(
-		startTaskCmd(a), runAgentCmd(a), dashCmd(a), watchTaskCmd(a), stopTaskCmd(a), resumeTaskCmd(a),
+		startTaskCmd(a), runAgentCmd(a), dashCmd(a), watchTaskCmd(a), stopTaskCmd(a), resumeTaskCmd(a), followUpCmd(a),
 		listTasksCmd(a), showTaskCmd(a), renameTaskCmd(a), deleteTaskCmd(a),
 		notesCmd(a), briefCmd(a), trustCmd(a), untrustCmd(a),
 		loginCmd(a), statusCmd(a), logoutCmd(a),
-		rolesCmd(a), configCmd(a), walkthroughCmd(a), openPRCmd(a), voiceCmd(a), disableTipsCmd(a), enableTipsCmd(a), versionCmd(), internalRunCmd(a),
+		rolesCmd(a), configCmd(a), spendCmd(a), walkthroughCmd(a), openPRCmd(a), voiceCmd(a), disableTipsCmd(a), enableTipsCmd(a), versionCmd(), internalRunCmd(a),
 	)
 	if cmd, err := root.ExecuteContextC(ctx); err != nil {
 		if !errors.Is(err, errReported) {
@@ -301,4 +311,27 @@ func versionCmd() *cobra.Command {
 		Short:   "Print the version",
 		Run:     func(cmd *cobra.Command, args []string) { fmt.Println("ackn4th", Version) },
 	}
+}
+
+// pickOpenAIModel picks the newest model the OpenAI key can use, when
+// none is configured, and saves it, as signing in does. Tasks started
+// from the dashboard or a script reach it when sign-in didn't pick one.
+func (a *app) pickOpenAIModel(ctx context.Context) error {
+	key, err := auth.OpenAIKey()
+	if err != nil {
+		return fmt.Errorf("%w for openai, and it isn't signed in: run `ackn4th login --provider openai` (p in the dashboard), which picks the newest model your key can use", config.ErrNoModel)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	m, err := openai.New(openai.Config{APIKey: key}).PickModel(ctx)
+	if err != nil {
+		return fmt.Errorf("%w for openai, and none could be picked (%v): set one with C in the dashboard (Models) or providers.openai.model", config.ErrNoModel, err)
+	}
+	if _, err := config.SetKey("providers.openai.model", m); err != nil {
+		return err
+	}
+	pc := a.cfg.Providers[openai.Name]
+	pc.Model = m
+	a.cfg.Providers[openai.Name] = pc
+	return nil
 }

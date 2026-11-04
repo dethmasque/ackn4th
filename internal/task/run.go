@@ -18,6 +18,7 @@ import (
 	"github.com/dethmasque/ackn4th/internal/provider"
 	"github.com/dethmasque/ackn4th/internal/role"
 	"github.com/dethmasque/ackn4th/internal/sandbox"
+	"github.com/dethmasque/ackn4th/internal/spend"
 	"github.com/dethmasque/ackn4th/internal/tools"
 	"github.com/dethmasque/ackn4th/internal/ui"
 	"github.com/dethmasque/ackn4th/internal/workspace"
@@ -54,6 +55,72 @@ type run struct {
 	systems []provider.System // each agent's system prompt
 	tools   []provider.ToolSpec
 	warmed  bool // shared prompts were prewarmed this run
+	// changed counts the files each agent has changed this run.
+	changed map[int]int
+	// spendErr is a failure to record spending, which stops the task
+	// when a cap depends on the record.
+	spendErr error
+}
+
+// taskCap is the task's spending cap in dollars, 0 for none.
+func (r *Runner) taskCap(t *Task) float64 {
+	if t.MaxCost > 0 {
+		return t.MaxCost
+	}
+	if r.Spend != nil {
+		return r.Spend.Limits.PerTask
+	}
+	return 0
+}
+
+// priced refuses to run an agent under a spending cap when its model's
+// price is unknown: the cap couldn't be kept.
+func (r *Runner) priced(t *Task, spec AgentSpec) error {
+	if r.Spend == nil || !r.Spend.Capped(spec.Provider, r.taskCap(t)) {
+		return nil
+	}
+	if _, ok := r.Spend.Price(spec.Provider, spec.Model); !ok {
+		return fmt.Errorf("%s (%s): a spending cap applies, but ackn4th doesn't know what %s costs. Add its price under spend.prices in the config (dollars per million tokens: input, cached, output)", spec.Role, spec.Provider, spec.Model)
+	}
+	return nil
+}
+
+// authorize is checked before every model request of an agent on prov:
+// its sign-in, and the spending caps.
+func (rn *run) authorize(prov string) error {
+	if err := rn.r.authorize(prov); err != nil {
+		return err
+	}
+	if rn.r.Spend == nil {
+		return nil
+	}
+	rn.mu.Lock()
+	cost, failed := rn.t.Cost(), rn.spendErr
+	rn.mu.Unlock()
+	if failed != nil && rn.r.Spend.Capped(prov, rn.r.taskCap(rn.t)) {
+		return &spend.OverError{Msg: "spending can't be recorded, so the caps can't be kept: " + failed.Error()}
+	}
+	return rn.r.Spend.Check(prov, cost, rn.r.taskCap(rn.t), time.Now())
+}
+
+// spent records what agent n (0-based) just used.
+func (rn *run) spent(n int, u provider.Usage) {
+	if rn.r.Spend == nil {
+		return
+	}
+	rn.mu.Lock()
+	spec := rn.t.Agents[n]
+	rn.mu.Unlock()
+	usd, err := rn.r.Spend.Record(rn.t.ID, spec.Provider, spec.Model, spend.Tokens{
+		InputTokens: u.InputTokens, OutputTokens: u.OutputTokens,
+		CachedTokens: u.CachedTokens, CacheWriteTokens: u.CacheWriteTokens,
+	}, time.Now())
+	rn.mu.Lock()
+	rn.t.Agents[n].Cost += usd
+	if err != nil {
+		rn.spendErr = err
+	}
+	rn.mu.Unlock()
 }
 
 // setup builds the agents, their tools and the shared state.
@@ -117,6 +184,10 @@ func (r *Runner) setup(t *Task) (*run, error) {
 		Changed: func(n int, p string) {
 			rn.mu.Lock()
 			rn.sh.Authors[p] = rn.labels[n-1]
+			if rn.changed == nil {
+				rn.changed = map[int]int{}
+			}
+			rn.changed[n-1]++
 			rn.mu.Unlock()
 		},
 		Send:    rn.send,
@@ -125,6 +196,10 @@ func (r *Runner) setup(t *Task) (*run, error) {
 		Resolve: rn.resolveTodo,
 	}
 	for i, spec := range t.Agents {
+		if err := r.priced(t, spec); err != nil {
+			rn.close()
+			return nil, err
+		}
 		p, err := r.NewProvider(spec)
 		if err != nil {
 			rn.close()
@@ -166,7 +241,8 @@ func (r *Runner) setup(t *Task) (*run, error) {
 				WS: ws, Notes: rn.book, Team: tm, Self: n, Commands: cmds,
 				Author: fmt.Sprintf("%s (%s, task %s)", spec.Role, spec.Provider, t.ID),
 			},
-			MaxSteps: r.MaxSteps, Authorize: func() error { return r.authorize(spec.Provider) },
+			MaxSteps: r.MaxSteps, Solo: len(t.Agents) == 1, Authorize: func() error { return rn.authorize(spec.Provider) },
+			Spent: func(u provider.Usage) { rn.spent(n-1, u) },
 			Inbox: func() (string, func()) { return rn.inbox(n) },
 			Emit: func(e event.Event) {
 				e.Round = t.Round
@@ -271,10 +347,11 @@ func (rn *run) prewarm(ctx context.Context, due []int) {
 			continue
 		}
 		spec := rn.t.Agents[g[0]]
-		if rn.r.authorize(spec.Provider) != nil {
+		if rn.authorize(spec.Provider) != nil {
 			return // the turn itself reports it
 		}
 		u, err := w.Prewarm(ctx, provider.System{Shared: rn.systems[g[0]].Shared}, rn.tools)
+		rn.spent(g[0], u)
 		text := fmt.Sprintf("shared context cached for %d %s agents · %s tokens", len(g), spec.Model, ui.Tokens(u.InputTokens))
 		if err != nil {
 			if ctx.Err() != nil {
@@ -433,12 +510,19 @@ func (rn *run) turn(ctx context.Context, n int, input string) (agent.TurnResult,
 		}
 		return writeAtomic(rn.r.Store.AgentStatePath(t.ID, n), state)
 	}
+	rn.mu.Lock()
+	changedBefore := rn.changed[n]
+	rn.mu.Unlock()
 	res, err := a.Turn(ctx, input, persist)
 	if err != nil {
+		// What the turn used before it ended was spent all the same.
+		rn.mu.Lock()
+		t.Agents[n].Usage.Add(res.Usage)
+		rn.mu.Unlock()
 		if ctx.Err() != nil {
 			return res, ctx.Err()
 		}
-		if errors.As(err, new(unauthorized)) {
+		if errors.As(err, new(unauthorized)) || errors.As(err, new(*spend.OverError)) {
 			return res, err
 		}
 		return res, fmt.Errorf("%s (%s): %w", spec.Role, spec.Provider, err)
@@ -458,8 +542,137 @@ func (rn *run) turn(ctx context.Context, n int, input string) (agent.TurnResult,
 		s.NotesSeen = ""
 	}
 	s.Done, s.DoneSummary = res.Done, res.DoneSummary
+	s.DoneStreak = 0
+	if res.Done {
+		s.DoneStreak = spec.DoneStreak + 1
+	}
+	s.SameHandoffs, s.Idle = 0, 0
+	if s.Turns > 1 && !res.Done && res.Message == spec.Message {
+		s.SameHandoffs = spec.SameHandoffs + 1
+	}
+	if res.Cut && !res.Done && rn.changed[n] == changedBefore {
+		s.Idle = spec.Idle + 1
+	}
 	s.Message, s.MessageRound, s.RoundDone = res.Message, t.Round, t.Round
+	// Follow-ups can't be added while the task runs, so the input had
+	// them all.
+	s.FollowUpsSeen = len(t.FollowUps)
 	return res, rn.r.Store.Save(t)
+}
+
+// StuckError stops a task whose agent is going in circles, before it
+// spends more: the same handoff three turns running, or two turns in a
+// row out of tool calls (or repeating itself) without changing a file.
+type StuckError struct{ msg string }
+
+func (e *StuckError) Error() string { return e.msg }
+
+// A team can split for good: some agents declare done every round while
+// the others keep polishing (one copilot team went 25 rounds that way).
+// After nudgeSplit such rounds the holdouts are told so; after maxSplit
+// the task stops.
+const (
+	nudgeSplit = 2
+	maxSplit   = 5
+)
+
+// splitVote counts a finished round in which some agents, but not all,
+// declared done, and stops the task when that has gone on too long.
+func splitVote(t *Task) error {
+	var voted, working []string
+	for _, a := range t.Agents {
+		if a.DoneStreak > 0 {
+			voted = append(voted, a.Role)
+		} else {
+			working = append(working, a.Role)
+		}
+	}
+	if len(voted) == 0 || len(working) == 0 {
+		t.SplitRounds = 0
+		return nil
+	}
+	t.SplitRounds++
+	if t.SplitRounds < maxSplit {
+		return nil
+	}
+	return &StuckError{fmt.Sprintf("the team hasn't agreed for %d rounds: %s kept declaring the task done while %s kept working, so the task stopped to save cost. Read the latest handoffs, then give a follow-up with what's left, or resume it",
+		t.SplitRounds, strings.Join(voted, ", "), strings.Join(working, ", "))}
+}
+
+// splitNudge is what a holdout is told once the team has been split for
+// nudgeSplit rounds.
+func splitNudge(t *Task, n int) string {
+	if t.SplitRounds < nudgeSplit || t.Agents[n].DoneStreak > 0 {
+		return ""
+	}
+	var voted []string
+	for i, a := range t.Agents {
+		if i != n && a.DoneStreak > 0 {
+			voted = append(voted, fmt.Sprintf("%s (%s)", a.Role, plural(a.DoneStreak, "turn")))
+		}
+	}
+	if len(voted) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\n# Your teammates say the task is done\n\nFor %d rounds, some of the team has declared the task done while the rest kept working. Declared done in their latest turns, for that many turns running: %s. "+
+		"If every requirement of the task is met, declare done this turn: polishing what already works keeps the task running and costs the person money every round. "+
+		"What only the person can do (a browser or device check, a credential, a decision) belongs in add_user_todo, and open to-dos don't stop you declaring done. "+
+		"If something the task requires is still missing, name it in your closing message and finish it now. After %d such rounds the task stops.\n",
+		t.SplitRounds, strings.Join(voted, ", "), maxSplit)
+}
+
+func plural(n int, what string) string {
+	if n == 1 {
+		return "1 " + what
+	}
+	return fmt.Sprintf("%d %ss", n, what)
+}
+
+func stuck(t *Task, n int) error {
+	s := t.Agents[n]
+	who := fmt.Sprintf("agent %d (%s, %s %s)", n+1, s.Role, s.Provider, s.Model)
+	var what string
+	switch {
+	case s.SameHandoffs >= 2:
+		what = fmt.Sprintf("gave the same handoff three turns running (“%s”)", oneLine(s.Message, 80))
+	case s.Idle >= 2:
+		what = "used its turn up two turns running without changing a file or handing off"
+	default:
+		return nil
+	}
+	return &StuckError{fmt.Sprintf("%s %s: it looks stuck, so the task stopped to save cost. Resume it on another model or provider, or give it a follow-up", who, what)}
+}
+
+// reminderMax is how much of the task a reminder quotes.
+const reminderMax = 2000
+
+// reminder restates the task at the start of every turn after an agent's
+// first, so it stays in view however long the run, and survives the
+// conversation being compacted into the model's own summary.
+func reminder(t *Task, agent int) string {
+	clip := func(s string) string {
+		s = strings.TrimSpace(s)
+		if r := []rune(s); len(r) > reminderMax {
+			s = string(r[:reminderMax]) + "… (cut here; the full text was in your first turn)"
+		}
+		return s
+	}
+	s := "# The task (a reminder: keep your work on it)\n\n" + clip(t.Prompt) + "\n"
+	// A follow-up the agent hasn't had yet is given in full below.
+	if n := len(t.FollowUps); n > 0 && t.Agents[agent].FollowUpsSeen >= n {
+		f := t.FollowUps[n-1]
+		s += fmt.Sprintf("\nThe latest follow-up, from round %d:\n\n%s\n", f.Round, clip(f.Prompt))
+	}
+	return s
+}
+
+// oneLine is s on one line, at most n runes.
+func oneLine(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > n {
+		s = string(r[:n-1]) + "…"
+	}
+	return s
 }
 
 // sequential runs agents one at a time, each handing off to the next.
@@ -489,6 +702,9 @@ func (rn *run) sequential(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if err := stuck(t, n); err != nil {
+			return err
+		}
 
 		if !res.Done {
 			// Consensus must be unanimous and current: one agent with
@@ -500,6 +716,9 @@ func (rn *run) sequential(ctx context.Context) error {
 		t.Handoff, t.HandoffFrom, t.Note = res.Message, n+1, ""
 		t.Next = (n + 1) % len(t.Agents)
 		if t.Next == 0 {
+			if err := splitVote(t); err != nil {
+				return err
+			}
 			t.Round++
 		}
 		if err := rn.r.Store.Save(t); err != nil {
@@ -573,11 +792,21 @@ func (rn *run) parallel(ctx context.Context) error {
 				return err
 			}
 		}
+		// A stuck agent stops the task once the round is over, so its
+		// teammates' turns aren't cut short.
+		for _, n := range due {
+			if err := stuck(t, n); err != nil {
+				return err
+			}
+		}
 
 		// The round is complete.
 		if allDone(t) {
 			t.Reason = summary(t)
 			return nil
+		}
+		if err := splitVote(t); err != nil {
+			return err
 		}
 		for i := range t.Agents {
 			t.Agents[i].Done = false
@@ -596,6 +825,8 @@ func (rn *run) input(n int, briefing string) string {
 	var b strings.Builder
 	if !t.Started[n] {
 		fmt.Fprintf(&b, "# Task\n\n%s\n", t.Prompt)
+	} else {
+		b.WriteString(reminder(t, n))
 	}
 	b.WriteString(briefing)
 	if t.Parallel() {
@@ -615,6 +846,14 @@ func (rn *run) input(n int, briefing string) string {
 	if t.Note != "" {
 		fmt.Fprintf(&b, "\n# Note from the human operator\n\n%s\n", t.Note)
 	}
+	// Follow-ups go to every agent once, however its turns fall. An
+	// agent's first turn has the task above, so it gets all of them.
+	for _, f := range t.pendingFollowUps(n) {
+		fmt.Fprintf(&b, "\n# Follow-up from the person who gave the task (round %d)\n\nThe task was finished; this is more work for the team, in the same workspace. Every agent has to declare done again.\n\n%s\n", f.Round, f.Prompt)
+		if len(f.Changes) > 0 {
+			fmt.Fprintf(&b, "\nThe team changed for this follow-up (the roles above are current):\n\n- %s\n", strings.Join(f.Changes, "\n- "))
+		}
+	}
 	if t.Started[n] && t.Solo() {
 		b.WriteString("Continue working on the task. Call declare_done once it is complete.\n")
 	}
@@ -631,6 +870,19 @@ func (rn *run) input(n int, briefing string) string {
 		}
 		fmt.Fprintf(&b, "\nTeammates who have declared the task done%s: %s.\n", when, strings.Join(done, ", "))
 	}
+	if t.Parallel() && len(done) == 0 {
+		// Votes are cleared between rounds; say who voted last time.
+		var last []string
+		for i, a := range t.Agents {
+			if i != n && a.DoneStreak > 0 {
+				last = append(last, a.Role)
+			}
+		}
+		if len(last) > 0 {
+			fmt.Fprintf(&b, "\nTeammates who declared the task done last round: %s. The task completes when every agent declares done in the same round.\n", strings.Join(last, ", "))
+		}
+	}
+	b.WriteString(splitNudge(t, n))
 	round := fmt.Sprintf("\n(Round %d", t.Round)
 	if t.MaxRounds > 0 {
 		round += fmt.Sprintf(" of %d", t.MaxRounds)

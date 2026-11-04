@@ -65,11 +65,38 @@ var symbols = strings.NewReplacer(
 	"⏎", " enter ", "{", "", "}", "", "…,", ",", "….", ".",
 	"/", " slash ", "→", ", ", "·", ", ", "—", ", ", "–", ", ", "…", ".",
 	"_", " ", "`", "", "*", "", "|", ", ", "[", "", "]", "", "<", "", ">", "",
-	"ackn4th", "acknowledge forth",
 )
+
+// ackn4th is "ack-'n-forth", like back-and-forth; the phonemizer has the
+// word acknforth.
+var nameRE = regexp.MustCompile(`(?i)\backn4th\b`)
+
+// timeRE is a clock time: 12:07, 12:07:05, 12:07 PM.
+var timeRE = regexp.MustCompile(`\b(\d{1,2}):(\d{2})(?::\d{2})?(\s*[AP]M)?\b`)
+
+// clock reads a time as people say it: "twelve oh seven PM", not each
+// number with its seconds.
+func clock(t string) string {
+	m := timeRE.FindStringSubmatch(t)
+	h, _ := strconv.Atoi(m[1])
+	min, _ := strconv.Atoi(m[2])
+	out := words(h)
+	switch {
+	case min == 0 && m[3] == "":
+		out += " o'clock"
+	case min == 0:
+	case min < 10:
+		out += " oh " + ones[min]
+	default:
+		out += " " + words(min)
+	}
+	return " " + out + m[3] + " "
+}
 
 // Normalize turns UI text into something the voice reads naturally.
 func Normalize(s string) string {
+	s = nameRE.ReplaceAllString(s, "acknforth")
+	s = timeRE.ReplaceAllStringFunc(s, clock)
 	for groupRE.MatchString(s) {
 		s = groupRE.ReplaceAllString(s, "$1$2")
 	}
