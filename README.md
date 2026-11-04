@@ -1,19 +1,32 @@
-# `ackn4th`: a hobbyist's alternative to A2A Automation
+# `ackn4th`: a hobbyist's alternative to A2A automation
 
-## `)) <==> ((`
-
-Back and forth, forever.
+Wrangle AI agents across providers, models, and effort levels, sending them 
+off to tackle a task of your choosing. They can take turns and work serially: 
 
 ```
-   ▓▒░  a c k n 4 t h  ░▒▓
-   agent ──▶ ( ✎ ) ──▶ agent
-     ▲                   │
-     ╰──── ( ✓ ) ◀───────╯
+   ▓▒░  a c k n 4 t h  ░▒▓   ::::   taking turns on a task within your project
+  ╭──▶ product_manager ──▶ ( ✎ ) ──▶ backend_dev ──▶ ( ✎ ) ──▶ frontend_dev ──╮
+  │                                                                           │
+  ▲                                                                         ( ✎ )
+  │                                                                           ▼
+  ╰───── ( ✓?) ◀───── qa_engineer ◀───── ( ✎ ) ◀───── security_engineer ◀─────╯
 ```
 
-`ackn4th` puts a team of AI agents to work on your code. Each agent plays a
-software role (backend dev, QA, reviewer, …). They take turns, or work in
-parallel, in your project directory until they all agree the task is done.
+Or in parallel, collaborating until they all agree the task is done:
+
+```
+          ▓▒░  a c k n 4 t h  ░▒▓ 
+ tackling a task in parallel within your project
+       ╭──▶ product_manager ────▶ ( ✎ ) ──╮
+       ├──▶ backend_dev ────────▶ ( ✎ ) ──┤
+  ╭──▶ ┼──▶ frontend_dev ───────▶ ( ✎ ) ──┼──╮
+  │    ├──▶ security_engineer ──▶ ( ✎ ) ──┤  │
+  ▲    ╰──▶ qa_engineer ────────▶ ( ✎ ) ──╯  │
+  │                                          ▼
+  ╰───────────────── ( ✓?) ◀─────────────────╯
+```
+
+Tasks can be kicked off using CLI commands:  
 
 ```sh
 cd ~/code/my-project
@@ -21,16 +34,19 @@ ackn4th start-task --parallel --roles backend_dev,qa_engineer,code_reviewer \
   "Complete every requirement in https://github.com/example/example/issues/1"
 ```
 
+Or via the dashboard, opened when running the binary directly without 
+commands (`./ackn4th` from the install directory).
+
 Agents run on your existing plans through their CLIs (**Claude Code**,
 **Codex**, **Cursor**, **Copilot**) or on API keys (**Claude**, **Gemini**,
-**OpenAI**). Every agent can use a different one.
+**OpenAI**). 
 
-> **A hobby project, for hobbyists.** ackn4th is for quickly putting together
+> **A hobby project, for hobbyists.** `ackn4th` is for quickly putting together
 > a team of software-development agents that iterates on a prompt until the
 > result is ready to demo to you. It is not a product, a hosted service or
-> something to run in production, and it comes with no support or warranty.
-> It runs on your own accounts and API keys: what you send, what it costs and
-> following each provider's terms are up to you. [Spending caps](#keeping-costs-in-check)
+> something to run in production (...yet? *wink*), and it comes with no support 
+> or warranty. It runs on your own accounts and API keys: what you send, what it 
+> costs and following each provider's terms are up to you. [Spending caps](#keeping-costs-in-check)
 > help keep that in check.
 
 ## Is it for you?
@@ -57,7 +73,7 @@ Agents run on your existing plans through their CLIs (**Claude Code**,
 
 - Professionals automating their whole development workflow.
 - People who don't like reviewing AI output, code included. Everything
-  ackn4th makes is a draft for you to check.
+  `ackn4th` makes is a draft for you to check.
 - Those without ideas or tokens.
 
 **What it's not for**
@@ -68,12 +84,11 @@ Agents run on your existing plans through their CLIs (**Claude Code**,
 ## Install
 
 ackn4th is one binary for macOS and Linux, on Intel/AMD (amd64) and ARM
-(arm64). **Windows is not part of 0.1.0**: its sandbox is still being
+(arm64). Every release is on the [releases page](https://github.com/dethmasque/ackn4th/releases), 
+with `checksums.txt` to verify the downloads.
+**Windows is not officially supported yet**: its sandbox is still being
 verified, and without a working sandbox agents can't run commands (see the
-[security model](internal/sandbox/README.md)). Windows builds will follow
-once they pass the same tests. Every release is on the
-[releases page](https://github.com/dethmasque/ackn4th/releases), with
-`checksums.txt` to verify the downloads.
+[security model](internal/sandbox/README.md)). 
 
 **macOS and Linux**
 
@@ -102,9 +117,6 @@ curl -fsSLO "$url/ackn4th_linux_$arch.rpm" && sudo dnf install "./ackn4th_linux_
 curl -fsSLO "$url/ackn4th_linux_$arch.apk" && sudo apk add --allow-untrusted "./ackn4th_linux_$arch.apk"   # Alpine
 ```
 
-**Windows:** no release yet. The container below is the only supported
-route, from inside WSL 2.
-
 **With Go** (1.27.3 or later), on any OS:
 
 ```sh
@@ -117,9 +129,6 @@ Agents' commands run in the OS's own sandbox
 - **macOS:** built in.
 - **Linux:** install [bubblewrap](https://github.com/containers/bubblewrap)
   (`apt install bubblewrap`).
-- **Windows:** not released yet (an AppContainer sandbox exists in the
-  source but is unverified; builds from source refuse to run commands
-  unless it works).
 
 Optional: the [GitHub CLI](https://cli.github.com) (`gh`), for
 [GitHub issues, repositories and draft pull requests](internal/github/README.md).
@@ -137,7 +146,7 @@ alias ackn4th="$HOME/ackn4th/container/ackn4th-container"   # add this to your s
 
 You only need the ones you use. A provider's CLI on your plan is usually the
 better choice: no API key to manage and no API rate limits. When you don't
-name a provider and its CLI is signed in, ackn4th uses the CLI.
+name a provider and its CLI is signed in, `ackn4th` uses the CLI.
 
 | Provider | Runs on |
 | --- | --- |
@@ -155,8 +164,8 @@ How to sign in to each, and how to choose models and efforts per agent:
 ## First run
 
 Agents work in the current directory. The first time they work in a
-directory, ackn4th asks you to **trust** it, since agents read it and send
-its contents to the model provider. ackn4th has no accounts of its own:
+directory, `ackn4th` asks you to **trust** it, since agents read it and send
+its contents to the model provider. `ackn4th` has no accounts of its own:
 agents run on the AI providers you sign in to, and they stay signed in
 until you run `ackn4th logout`.
 
@@ -210,8 +219,8 @@ Every command, flag and the scripting (CI) mode:
 
 Agents on an API key (Claude, Gemini, OpenAI) cost money with every
 request; agents on your plan through a CLI (Claude Code, Codex, Cursor,
-Copilot) use its limits instead. ackn4th estimates what each request costs
-and can stop a task before it spends more than you allow:
+Copilot) use its limits instead. `ackn4th` estimates what each request 
+costs and can stop a task before it spends more than you allow:
 
 - **For one task:** the **CAP $** field in the new-task form, or
   `start-task --max-cost 5`.
@@ -264,7 +273,7 @@ internal/workspace/   os.Root confinement, write globs, secret filtering
 ## License
 
 [MIT](LICENSE): use, change and share it freely, with no warranty. The
-license covers ackn4th's own code only. The models and agent CLIs it drives
+license covers `ackn4th`'s own code only. The models and agent CLIs it drives
 come with their providers' terms, which you agree to when you sign in. The
 optional voice downloads sherpa-onnx and Kokoro (both Apache-2.0) from their
 own releases.
