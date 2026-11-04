@@ -51,23 +51,6 @@ soon as the tag is public, through the Go module proxy.
 | `just lint` | staticcheck, govulncheck and actionlint (which checks the workflows) |
 | `just container-build` | The container image (not part of a release) |
 
-## Before the first release
-
-Once, on GitHub:
-
-1. **Make the repository public** (Settings → General → Danger Zone →
-   Change visibility). Release downloads and `go install` need it: a
-   private repository's releases are visible only to people with access.
-2. **Let workflows write releases.** Settings → Actions → General:
-   *Actions permissions* allows all actions (or at least `actions/*`), and
-   nothing under *Workflow permissions* needs changing: the release job asks
-   for `contents: write` itself. If your account or organization caps the
-   workflow token at read-only, the release job fails with
-   `403 Resource not accessible by integration`; allow read and write there.
-3. **Optional: protect version tags** (Settings → Rules → Rulesets → New tag
-   ruleset, target `v*`, restrict deletions and updates), so a published
-   version can't be moved or deleted by accident.
-
 ## Releasing, step by step
 
 Versions follow [semver](https://semver.org): `vMAJOR.MINOR.PATCH`. Tags

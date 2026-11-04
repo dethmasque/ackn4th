@@ -40,7 +40,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-26.04, macos-26, windows-2025] # pinned images; bump deliberately
+        # Pinned images; bump deliberately. macos-15, not macos-26: the
+        # macos-26 arm64 pool is short of capacity, and its jobs sit queued
+        # until GitHub cancels them ("was not acquired by Runner of type
+        # hosted"); https://github.com/orgs/community/discussions/211885
+        os: [ubuntu-26.04, macos-15, windows-2025]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
