@@ -141,7 +141,9 @@ func login(cmd *cobra.Command, a *app, providers []string, reauth bool, gcpProje
 	var verified []string
 	for _, p := range sel {
 		if err := loginProvider(cmd.Context(), a, p, reauth); err != nil {
-			t.Println(" ", t.Red("✗"), " ", t.ProviderColor(p, fmt.Sprintf("%-11s", p)), " ", inline(t, err.Error()))
+			// The provider's name is already the line's first column.
+			msg := strings.TrimPrefix(err.Error(), p+": ")
+			t.Println(" ", t.Red("✗"), " ", t.ProviderColor(p, fmt.Sprintf("%-11s", p)), " ", inline(t, msg))
 			continue
 		}
 		verified = append(verified, p)
@@ -150,7 +152,10 @@ func login(cmd *cobra.Command, a *app, providers []string, reauth bool, gcpProje
 	// means nothing now.
 	auth.ForgetOldSignIn()
 	if len(verified) == 0 {
-		return errors.New("no provider could be signed in")
+		if len(sel) == 1 {
+			return fmt.Errorf("%s isn't signed in: fix the problem above and run `ackn4th login --provider %s` again", sel[0], sel[0])
+		}
+		return errors.New("no provider could be signed in: fix the problems above and run `ackn4th login` again")
 	}
 	t.Println()
 	t.Rain(6, 900*time.Millisecond)
