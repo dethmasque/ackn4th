@@ -74,12 +74,16 @@ Versions follow [semver](https://semver.org): `vMAJOR.MINOR.PATCH`. Tags
 with a suffix (`v0.2.0-rc.1`) are published as pre-releases. The examples
 release `v0.1.0`; substitute yours.
 
-**1. Start from a clean, current `main`.**
+**1. Merge everything the release needs, then start from a clean,
+current `main`.** The release is built from whatever commit you tag, so
+open pull requests and unmerged branches are not in it.
 
 ```sh
+gh pr list                  # merge what belongs in this release
 git switch main
 git pull --ff-only
 git status --short          # must print nothing
+git log --oneline -5        # the commits you expect are there
 ```
 
 **2. Run every check.** Docker must be running for `test-linux`.
@@ -107,21 +111,35 @@ tar -tzf dist/ackn4th_linux_amd64.tar.gz      # the binary, LICENSE, README.md, 
 ./dist/ackn4th-macos_darwin_$(go env GOARCH)*/ackn4th version   # on a Mac
 ```
 
-**4. Name the version in the README.** The `go install` line in the root
+**4. Check the version in the README.** The `go install` line in the root
 `README.md` names the release; the release job refuses to publish until it
 matches the tag.
 
 ```sh
 grep -n 'cmd/ackn4th@' README.md
-sed -i.bak 's|cmd/ackn4th@v[0-9.]*|cmd/ackn4th@v0.1.0|' README.md && rm README.md.bak
-git commit -am "release: v0.1.0"
-git push origin main
 ```
 
-**5. Tag it and push the tag.** This starts the release.
+If it already names the new version (as it does for `v0.1.0`), skip to
+step 5. Otherwise change it through a pull request like any other change,
+then come back to step 1:
 
 ```sh
-git tag -a v0.1.0 -m "v0.1.0"
+git switch -c release-v0.1.1
+sed -i.bak 's|cmd/ackn4th@v[0-9.]*|cmd/ackn4th@v0.1.1|' README.md && rm README.md.bak
+git commit -am "release: v0.1.1"
+git push -u origin release-v0.1.1
+gh pr create --fill         # merge it once CI is green
+```
+
+**5. Tag the commit and push the tag.** The tag doesn't exist until you
+make it: `git tag` names the commit you're on, which must be the `main`
+you just checked. Pushing the tag starts the release.
+
+```sh
+git switch main && git pull --ff-only
+test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" && echo "on origin/main"
+git tag -a v0.1.0 -m "v0.1.0"   # an annotated tag on this commit
+git show --no-patch v0.1.0      # check it names the right commit
 git push origin v0.1.0
 gh run watch "$(gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
 ```

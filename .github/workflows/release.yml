@@ -1,4 +1,5 @@
-# Publishes a release when a version tag is pushed: `git push origin v0.1.0`.
+# Publishes a release when a version tag is pushed (tag main's commit with
+# `git tag -a v0.1.0 -m v0.1.0`, then `git push origin v0.1.0`).
 # The tests run on every OS first (ci.yml); then GoReleaser builds the
 # archives and Linux packages from packaging/goreleaser.yaml and attaches
 # them, with checksums.txt, to a GitHub release for the tag.
