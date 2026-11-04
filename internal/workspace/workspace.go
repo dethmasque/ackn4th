@@ -192,7 +192,11 @@ func (w *Workspace) ReadOnly() bool { return len(w.writable) == 0 }
 func (w *Workspace) Writable() []string { return w.writable }
 
 // clean normalizes an agent-supplied path to a slash-separated relative path.
-func clean(p string) (string, error) {
+func clean(p string) (string, error) { return cleanFor(p, runtime.GOOS == "windows") }
+
+// cleanFor is clean, with Windows' extra name rules when windows is set,
+// so they are tested on every OS.
+func cleanFor(p string, windows bool) (string, error) {
 	p = strings.TrimSpace(strings.ReplaceAll(p, "\\", "/"))
 	if p == "" || p == "/" {
 		return ".", nil
@@ -204,7 +208,12 @@ func clean(p string) (string, error) {
 	if c == ".." || strings.HasPrefix(c, "../") {
 		return "", fmt.Errorf("%q escapes the workspace", p)
 	}
-	if runtime.GOOS == "windows" {
+	// The root itself: path.Clean leaves no other "." segment, and this
+	// one isn't a trailing-dot name.
+	if c == "." {
+		return c, nil
+	}
+	if windows {
 		for _, seg := range strings.Split(c, "/") {
 			if winAlias(seg) {
 				return "", fmt.Errorf("%q: Windows would read %q as another name (a stream, short name or trailing dot); use the file's real name", p, seg)

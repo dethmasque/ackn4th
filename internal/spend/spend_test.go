@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/dethmasque/ackn4th/internal/provider"
 )
 
 func near(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
@@ -15,16 +13,16 @@ func near(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
 func TestCost(t *testing.T) {
 	opus := Prices["claude-opus-5-5"]
 	// 1M in: 600k cached, 100k written, 300k fresh; 100k out.
-	u := provider.Usage{InputTokens: 1_000_000, CachedTokens: 600_000, CacheWriteTokens: 100_000, OutputTokens: 100_000}
+	u := Tokens{InputTokens: 1_000_000, CachedTokens: 600_000, CacheWriteTokens: 100_000, OutputTokens: 100_000}
 	if got, want := opus.Cost(u), 0.3*4+0.6*0.2+0.1*5+0.1*20; !near(got, want) {
 		t.Errorf("opus = %v, want %v", got, want)
 	}
 	gem := Prices["gemini-3.1-pro-preview"]
-	if got := gem.Cost(provider.Usage{InputTokens: 300_000}); !near(got, 1.2) {
+	if got := gem.Cost(Tokens{InputTokens: 300_000}); !near(got, 1.2) {
 		t.Errorf("long gemini prompt = %v, want the long price", got)
 	}
 	// Unset cached and write prices default to a tenth of input, and input.
-	if got := (Price{Input: 10}).Cost(provider.Usage{InputTokens: 2_000_000, CachedTokens: 1_000_000}); !near(got, 11) {
+	if got := (Price{Input: 10}).Cost(Tokens{InputTokens: 2_000_000, CachedTokens: 1_000_000}); !near(got, 11) {
 		t.Errorf("defaults = %v", got)
 	}
 }

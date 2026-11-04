@@ -255,3 +255,18 @@ func TestWinAlias(t *testing.T) {
 		}
 	}
 }
+
+// TestWindowsNames runs Windows' name rules on every OS: the root is
+// fine, names Windows would read as another file are not.
+func TestWindowsNames(t *testing.T) {
+	for _, p := range []string{"", ".", "./", "/", "src", "src/main.go", "a/./b"} {
+		if _, err := cleanFor(p, true); err != nil {
+			t.Errorf("%q refused: %v", p, err)
+		}
+	}
+	for _, p := range []string{".git.", "src/GIT~1/config", "a.txt:stream", "NUL", "con.txt", "dir /x"} {
+		if _, err := cleanFor(p, true); err == nil {
+			t.Errorf("%q accepted", p)
+		}
+	}
+}

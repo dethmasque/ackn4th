@@ -22,8 +22,6 @@ import (
 	"regexp"
 	"sync"
 	"time"
-
-	"github.com/dethmasque/ackn4th/internal/provider"
 )
 
 // Price is what a model costs, in US dollars per million tokens.
@@ -61,8 +59,20 @@ var Billed = map[string]bool{"claude": true, "gemini": true, "openai": true}
 // dated is an OpenAI snapshot suffix, priced as the model it snapshots.
 var dated = regexp.MustCompile(`-\d{4}-\d{2}-\d{2}$`)
 
+// Tokens are what one model request used, as a provider reports them.
+// spend keeps its own type so the config, which holds the caps, doesn't
+// depend on the provider packages.
+type Tokens struct {
+	InputTokens  int64
+	OutputTokens int64
+	// CachedTokens and CacheWriteTokens are the parts of InputTokens read
+	// from and written to the prompt cache.
+	CachedTokens     int64
+	CacheWriteTokens int64
+}
+
 // Cost is what u cost at p, in dollars.
-func (p Price) Cost(u provider.Usage) float64 {
+func (p Price) Cost(u Tokens) float64 {
 	if p.Long != nil && u.InputTokens > p.Above {
 		p = *p.Long
 	}
@@ -234,7 +244,7 @@ func USD(v float64) string {
 }
 
 // Record prices u and appends it to the ledger, returning its cost.
-func (p *Policy) Record(task, prov, model string, u provider.Usage, now time.Time) (float64, error) {
+func (p *Policy) Record(task, prov, model string, u Tokens, now time.Time) (float64, error) {
 	pr, ok := p.Price(prov, model)
 	if !ok || !p.billed(prov) {
 		return 0, nil

@@ -111,7 +111,10 @@ func (rn *run) spent(n int, u provider.Usage) {
 	rn.mu.Lock()
 	spec := rn.t.Agents[n]
 	rn.mu.Unlock()
-	usd, err := rn.r.Spend.Record(rn.t.ID, spec.Provider, spec.Model, u, time.Now())
+	usd, err := rn.r.Spend.Record(rn.t.ID, spec.Provider, spec.Model, spend.Tokens{
+		InputTokens: u.InputTokens, OutputTokens: u.OutputTokens,
+		CachedTokens: u.CachedTokens, CacheWriteTokens: u.CacheWriteTokens,
+	}, time.Now())
 	rn.mu.Lock()
 	rn.t.Agents[n].Cost += usd
 	if err != nil {
