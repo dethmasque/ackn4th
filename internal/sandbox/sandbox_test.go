@@ -111,8 +111,19 @@ func TestReadOnlyAndNetwork(t *testing.T) {
 	if res := run(t, cfg, sh("cat .env.example", "type .env.example")); res.ExitCode != 0 {
 		t.Errorf("read-only commands should still read files: %s", res.Output)
 	}
-	if res := run(t, cfg, sh("ls -a", "dir /a /b")); res.ExitCode != 0 || !strings.Contains(res.Output, ".env.example") {
+	// cmd's for loop lists the directory and nothing else; dir also asks
+	// about the volume, which the sandbox may not reach.
+	if res := run(t, cfg, sh("ls -a", "for %f in (.* *) do @echo %f")); res.ExitCode != 0 || !strings.Contains(res.Output, ".env.example") {
 		t.Errorf("read-only commands should still list the workspace: exit %d: %s", res.ExitCode, res.Output)
+	}
+	if runtime.GOOS == "windows" {
+		// Diagnostics: what dir makes of the workspace, read-only and not.
+		for _, ro := range []bool{true, false} {
+			c := cfg
+			c.ReadOnly = ro
+			res := run(t, c, `dir /a /b & echo --- & dir`)
+			t.Logf("dir, read-only %v: exit %d:\n%s", ro, res.ExitCode, res.Output)
+		}
 	}
 	curl := sh("/usr/bin/curl", filepath.Join(os.Getenv("SystemRoot"), "System32", "curl.exe"))
 	if _, err := os.Stat(curl); err == nil {
