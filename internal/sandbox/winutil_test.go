@@ -1,6 +1,9 @@
 package sandbox
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 const sampleSDDL = `O:S-1-5-21-1-2-3-1001G:S-1-5-21-1-2-3-513D:AI(D;OICI;0x10156;;;S-1-15-3-1024-9)(A;OICI;0x1301bf;;;S-1-15-3-1024-7)(A;OICIID;FA;;;SY)(A;OICIID;FA;;;S-1-5-21-1-2-3-1001)(A;OICIID;0x1200a9;;;S-1-15-3-1024-8)S:(ML;OICI;NW;;;LW)`
 
@@ -53,5 +56,39 @@ func TestCapName(t *testing.T) {
 	}
 	if capName("ws", `C:\a`) == capName("ws", `C:\b`) || capName("ws", `C:\a`) == capName("scratch", `C:\a`) {
 		t.Error("capability names should differ by path and kind")
+	}
+}
+
+// The workspace's grant (inherited), an old deny entry from an earlier
+// version, and ALL APPLICATION PACKAGES: restricting .git keeps the user's
+// own entries and gives the sandbox read-only access, nothing more.
+func TestRestrictDACL(t *testing.T) {
+	const ws, ro, keep = "S-1-15-3-1024-7", "S-1-15-3-1024-8", "S-1-15-3-1024-9"
+	in := `O:S-1-5-21-1-2-3-1001D:AI(D;OICI;0x10156;;;` + ws + `)(A;OICI;0x1200a9;;;AC)(A;OICIID;FA;;;SY)(A;OICIID;FA;;;S-1-5-21-1-2-3-1001)(A;OICIID;0x1301bf;;;` + ws + `)(A;OICIID;0x1301bf;;;` + keep + `)S:(ML;OICI;NW;;;LW)`
+	got, changed, err := restrictDACL(in, []string{ws, ro}, true)
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	want := `D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;S-1-5-21-1-2-3-1001)(A;OICI;0x1200a9;;;` + ws + `)(A;OICI;0x1200a9;;;` + ro + `)`
+	if got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+	// Applied again, nothing changes: no rewrite on every launch.
+	if again, changed, err := restrictDACL(got, []string{ws, ro}, true); err != nil || changed || again != got {
+		t.Errorf("second pass: changed=%v err=%v\n%s", changed, err, again)
+	}
+	// A credential file: no AppContainer access at all.
+	got, _, err = restrictDACL(`D:AI(A;;FA;;;S-1-5-21-1-2-3-1001)(A;ID;0x1301bf;;;`+ws+`)`, nil, false)
+	if err != nil || got != `D:PAI(A;;FA;;;S-1-5-21-1-2-3-1001)` {
+		t.Errorf("secret: %s %v", got, err)
+	}
+	// Tampering (a command re-granting itself more) is undone.
+	tampered := `D:PAI(A;;FA;;;S-1-5-21-1-2-3-1001)(A;OICI;FA;;;` + ws + `)`
+	if got, changed, _ := restrictDACL(tampered, []string{ws}, true); !changed || strings.Contains(got, ";FA;;;"+ws) {
+		t.Errorf("tampered grant kept: %s", got)
+	}
+	// Entries it can't copy faithfully are refused, not dropped.
+	if _, _, err := restrictDACL(`D:(XA;;FA;;;WD;(@User.x == 1))`, nil, false); err == nil {
+		t.Error("a conditional entry was accepted")
 	}
 }

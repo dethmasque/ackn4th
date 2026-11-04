@@ -17,9 +17,13 @@ package sandbox
 // should have. So a command reaches its own workspace and scratch, never
 // another task's, and never the user's other files.
 //
-// Within a granted tree, deny entries keep .git and .ackn4th read-only and
-// credential files unreadable. AppContainer processes run at low
-// integrity, so the paths they write are labeled low integrity too.
+// Within a granted tree, .git and .ackn4th are read-only and credential
+// files unreadable. Deny entries can't do that: the AppContainer access
+// check ignores deny entries for packages and capabilities. So those
+// paths' ACLs are protected from inheriting the grant, with AppContainer
+// access left out (see restrictDACL), and checked again on every launch.
+// AppContainer processes run at low integrity, so the paths they write
+// are labeled low integrity too.
 //
 // The grants stay on the paths' ACLs. They name capabilities only ackn4th
 // gives out, so other programs gain nothing from them.
@@ -86,16 +90,11 @@ const (
 	fileWrite   = 0x120116 // FILE_GENERIC_WRITE
 	fileExecute = 0x1200A0 // FILE_GENERIC_EXECUTE
 	// DELETE only. Grants must NOT include FILE_DELETE_CHILD (0x40): with
-	// it a command could rename or delete .git/.ackn4th (a deny entry on
-	// the child doesn't override the parent's delete-child right) and
-	// plant its own. With DELETE alone, removing an entry needs DELETE on
-	// that entry, which the deny entries take away.
+	// it a command could rename or delete .git/.ackn4th through the
+	// parent's right and plant its own. With DELETE alone, removing an
+	// entry needs DELETE on that entry, which the protected paths don't
+	// grant.
 	fileDelete = 0x10000
-	// What deny entries take away: writing (data, attributes, deleting
-	// including via the parent), changing the ACL or owner, and reading
-	// (data, listing, extended attributes).
-	denyWrite = 0x2 | 0x4 | 0x10 | 0x100 | 0x40 | 0x40000 | 0x80000 | fileDelete
-	denyRead  = 0x1 | 0x8
 
 	procThreadAttributeSecurityCapabilities = 0x00020009
 )
@@ -210,9 +209,10 @@ var (
 	toolGranted sync.Map
 )
 
-// ensureACE makes sure path's ACL has an explicit entry of typ ("A" allow,
-// "D" deny) for sid, inherited by everything under it.
-func ensureACE(path string, sid *windows.SID, typ string, mask uint32) error {
+// ensureACE makes sure path's ACL has an explicit allow entry for sid,
+// inherited by everything under it.
+func ensureACE(path string, sid *windows.SID, mask uint32) error {
+	const typ = "A"
 	key := typ + "|" + sid.String() + "|" + strings.ToLower(path)
 	aclMu.Lock()
 	defer aclMu.Unlock()
@@ -229,9 +229,6 @@ func ensureACE(path string, sid *windows.SID, typ string, mask uint32) error {
 			return err
 		}
 		mode := windows.GRANT_ACCESS
-		if typ == "D" {
-			mode = windows.DENY_ACCESS
-		}
 		inherit := uint32(windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT)
 		if !isDir(path) {
 			inherit = windows.NO_INHERITANCE
@@ -260,6 +257,49 @@ func ensureACE(path string, sid *windows.SID, typ string, mask uint32) error {
 		}
 	}
 	aclOK[key] = true
+	return nil
+}
+
+// restrict protects path's ACL so AppContainers reach it only with read
+// and execute for the capabilities in allow (none: no access). It runs on
+// every launch, so a change a command managed to make is undone before
+// the next command starts.
+func restrict(path string, allow ...*windows.SID) error {
+	aclMu.Lock()
+	defer aclMu.Unlock()
+	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return fmt.Errorf("reading the ACL of %s: %w", path, err)
+	}
+	var sids []string
+	for _, a := range allow {
+		sids = append(sids, a.String())
+	}
+	sddl, changed, err := restrictDACL(sd.String(), sids, isDir(path))
+	if err != nil {
+		return fmt.Errorf("protecting %s from the sandbox: %w", path, err)
+	}
+	if !changed {
+		return nil
+	}
+	nsd, err := windows.SecurityDescriptorFromString(sddl)
+	if err != nil {
+		return fmt.Errorf("protecting %s from the sandbox: %w", path, err)
+	}
+	dacl, _, err := nsd.DACL()
+	if err != nil {
+		return err
+	}
+	info := windows.SECURITY_INFORMATION(windows.DACL_SECURITY_INFORMATION | windows.PROTECTED_DACL_SECURITY_INFORMATION)
+	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, info, nil, nil, dacl, nil); err != nil {
+		return fmt.Errorf("protecting %s from the sandbox: %w", path, err)
+	}
+	// Grants cached as in place may have been on this path's ACL.
+	for k := range aclOK {
+		if strings.HasSuffix(k, "|"+strings.ToLower(path)) {
+			delete(aclOK, k)
+		}
+	}
 	return nil
 }
 
@@ -319,25 +359,13 @@ func wrap(cfg Config, argv []string) ([]string, error) {
 		return nil, err
 	}
 	var caps []string
-	// Every grant besides the workspace's own, to protect where it
-	// overlaps the workspace (a Keep or scratch directory that holds, or
-	// sits inside, the workspace would otherwise expose .git and
-	// credential files to its capability, which the deny entries on the
-	// workspace's capability don't touch).
-	type granted struct {
-		sid  *windows.SID
-		path string
-	}
-	var others []granted
+	var grantedPaths []string
 	grant := func(kind, path string, mask uint32, writable bool) (*windows.SID, error) {
 		sid, err := capability(capName(kind, path))
 		if err != nil {
 			return nil, err
 		}
-		if kind != "ws-rw" && kind != "ws-ro" {
-			others = append(others, granted{sid, path})
-		}
-		if err := ensureACE(path, sid, "A", mask); err != nil {
+		if err := ensureACE(path, sid, mask); err != nil {
 			return nil, err
 		}
 		if writable {
@@ -345,77 +373,81 @@ func wrap(cfg Config, argv []string) ([]string, error) {
 				return nil, err
 			}
 		}
+		grantedPaths = append(grantedPaths, path)
 		caps = append(caps, sid.String())
 		return sid, nil
 	}
 	const rw = fileRead | fileWrite | fileExecute | fileDelete
-	// The workspace.
+	// The workspace. Both its capabilities, read-write and read-only, may
+	// read .git and .ackn4th, whichever this command has, so commands of
+	// both kinds can run in one workspace without rewriting the ACLs.
+	wsRW, err := capability(capName("ws-rw", cfg.Workspace))
+	if err != nil {
+		return nil, err
+	}
+	wsRO, err := capability(capName("ws-ro", cfg.Workspace))
+	if err != nil {
+		return nil, err
+	}
 	kind, mask := "ws-rw", uint32(rw)
 	if cfg.ReadOnly {
 		kind, mask = "ws-ro", fileRead|fileExecute
 	}
-	ws, err := grant(kind, cfg.Workspace, mask, !cfg.ReadOnly)
-	if err != nil {
+	if _, err := grant(kind, cfg.Workspace, mask, !cfg.ReadOnly); err != nil {
 		return nil, err
-	}
-	var readOnlyPaths []string
-	if !cfg.ReadOnly {
-		for _, d := range []string{".git", ".ackn4th"} {
-			if p := filepath.Join(cfg.Workspace, d); exists(p) {
-				readOnlyPaths = append(readOnlyPaths, p)
-				if err := ensureACE(p, ws, "D", denyWrite); err != nil {
-					return nil, err
-				}
-			}
-		}
-	}
-	// Credential files, and hidden paths, inside the workspace.
-	unreadable, err := secretFiles(cfg.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	for _, h := range hidden(cfg) {
-		if within(h, cfg.Workspace) && exists(h) {
-			unreadable = append(unreadable, h)
-		}
-	}
-	for _, p := range unreadable {
-		if err := ensureACE(p, ws, "D", denyRead); err != nil {
-			return nil, err
-		}
 	}
 	// Scratch, and the CLI's own directories.
 	scratch, err := grant("scratch", cfg.Scratch, rw, true)
 	if err != nil {
 		return nil, err
 	}
-	for _, f := range cfg.Fixed {
-		if exists(f) {
-			if err := ensureACE(f, scratch, "D", denyWrite); err != nil {
-				return nil, err
-			}
-		}
-	}
 	for _, k := range cfg.Keep {
 		if _, err := grant("keep", k, rw, true); err != nil {
 			return nil, err
 		}
 	}
-	// Where another grant covers part of the workspace, apply the same
-	// protections to its capability.
-	for _, o := range others {
-		for _, p := range readOnlyPaths {
-			if within(p, o.path) {
-				if err := ensureACE(p, o.sid, "D", denyWrite); err != nil {
-					return nil, err
-				}
+	// What the grants must not reach: .git and .ackn4th (read-only),
+	// credential files and hidden paths (nothing), and the CLI's fixed
+	// directories in scratch (read-only). Restricted after granting, so
+	// no grant's inheritance runs over them; a grant made later skips
+	// them too, since their ACLs are protected.
+	readOnly := []string{}
+	for _, d := range []string{".git", ".ackn4th"} {
+		if p := filepath.Join(cfg.Workspace, d); exists(p) {
+			readOnly = append(readOnly, p)
+		}
+	}
+	unreadable, err := secretFiles(cfg.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	for _, h := range hidden(cfg) {
+		if exists(h) && slices.ContainsFunc(grantedPaths, func(g string) bool { return within(h, g) }) {
+			unreadable = append(unreadable, h)
+		}
+	}
+	// A grant inside a protected path would hand that part back.
+	for _, g := range grantedPaths {
+		for _, p := range append(slices.Clone(readOnly), unreadable...) {
+			if within(g, p) {
+				return nil, fmt.Errorf("%s is inside %s, which commands mustn't change: choose another directory", g, p)
 			}
 		}
-		for _, p := range unreadable {
-			if within(p, o.path) {
-				if err := ensureACE(p, o.sid, "D", denyRead); err != nil {
-					return nil, err
-				}
+	}
+	for _, p := range readOnly {
+		if err := restrict(p, wsRW, wsRO); err != nil {
+			return nil, err
+		}
+	}
+	for _, p := range unreadable {
+		if err := restrict(p); err != nil {
+			return nil, err
+		}
+	}
+	for _, f := range cfg.Fixed {
+		if exists(f) {
+			if err := restrict(f, scratch); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -430,14 +462,14 @@ func wrap(cfg Config, argv []string) ([]string, error) {
 	for _, d := range toolDirs(cfg, append(extra, argv[0])) {
 		key := strings.ToLower(d)
 		if _, tried := toolTried.LoadOrStore(key, true); !tried {
-			toolGranted.Store(key, ensureACE(d, tools, "A", fileRead|fileExecute) == nil)
+			toolGranted.Store(key, ensureACE(d, tools, fileRead|fileExecute) == nil)
 		}
 		// Where a hidden path (credentials, ackn4th's own data) sits in a
 		// tool directory, the grant must not reach it. Fail closed.
 		if ok, _ := toolGranted.Load(key); ok == true {
 			for _, h := range hide {
 				if within(h, d) && exists(h) {
-					if err := ensureACE(h, tools, "D", denyRead); err != nil {
+					if err := restrict(h); err != nil {
 						return nil, err
 					}
 				}
@@ -658,9 +690,16 @@ func launch(enc string, argv []string) int {
 	if err != nil {
 		return fail(err)
 	}
+	// The environment ackn4th built, passed explicitly: given none,
+	// Windows builds an AppContainer's from the parent's and points TEMP
+	// and TMP at the container's profile folder instead of scratch.
+	env, err := envBlock(os.Environ())
+	if err != nil {
+		return fail(err)
+	}
 	var pi windows.ProcessInformation
-	flags := uint32(windows.EXTENDED_STARTUPINFO_PRESENT | windows.CREATE_SUSPENDED | windows.CREATE_NO_WINDOW)
-	if err := windows.CreateProcess(nil, line, nil, nil, len(handles) > 0, flags, nil, nil, &si.StartupInfo, &pi); err != nil {
+	flags := uint32(windows.EXTENDED_STARTUPINFO_PRESENT | windows.CREATE_SUSPENDED | windows.CREATE_NO_WINDOW | windows.CREATE_UNICODE_ENVIRONMENT)
+	if err := windows.CreateProcess(nil, line, nil, nil, len(handles) > 0, flags, env, nil, &si.StartupInfo, &pi); err != nil {
 		return fail(fmt.Errorf("starting %s: %w", argv[0], err))
 	}
 	defer windows.CloseHandle(pi.Thread)
@@ -701,4 +740,28 @@ func commandLine(argv []string) string {
 		return windows.EscapeArg(argv[0]) + ` /d /s /c "` + argv[4] + `"`
 	}
 	return windows.ComposeCommandLine(argv)
+}
+
+// envBlock makes a CreateProcess environment block: NAME=value entries,
+// sorted by name as Windows expects, each ended by a NUL, and the block
+// by another.
+func envBlock(env []string) (*uint16, error) {
+	env = slices.Clone(env)
+	slices.SortFunc(env, func(a, b string) int {
+		ka, _, _ := strings.Cut(a, "=")
+		kb, _, _ := strings.Cut(b, "=")
+		return strings.Compare(strings.ToUpper(ka), strings.ToUpper(kb))
+	})
+	var b []uint16
+	for _, kv := range env {
+		if strings.ContainsRune(kv, 0) {
+			return nil, fmt.Errorf("an environment variable holds a NUL")
+		}
+		b = append(b, windows.StringToUTF16(kv)...) // ends with a NUL
+	}
+	if len(b) == 0 {
+		b = append(b, 0)
+	}
+	b = append(b, 0)
+	return &b[0], nil
 }

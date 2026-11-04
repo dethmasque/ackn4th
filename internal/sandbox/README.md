@@ -152,8 +152,11 @@ folder on your `PATH` is used, ackn4th adds an entry to its access list
 granting the sandbox access. That first command takes longer in a large
 workspace. Each entry names a capability that ackn4th derives for that one
 path and gives only to the commands meant to reach it. A command in one
-workspace can't reach another, even though the entries stay. Deny entries
-keep `.git`, `.ackn4th` and credential files out of reach. AppContainers run
+workspace can't reach another, even though the entries stay. `.git` and
+`.ackn4th` are read-only to commands and credential files unreadable: their
+access lists stop inheriting the workspace's entry and give the sandbox
+read access (or none), checked again before every command. Deny entries
+can't do this, since Windows ignores them for sandboxed processes. AppContainers run
 at low integrity, so the folders they write are labeled low integrity too.
 Agent CLIs reach ackn4th's tools over localhost, which Windows blocks for
 AppContainers until an administrator runs, once:
