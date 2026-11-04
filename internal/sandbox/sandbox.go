@@ -162,7 +162,10 @@ func Run(ctx context.Context, cfg Config, command string, timeout time.Duration)
 func prepare(cfg Config, argv []string) (*exec.Cmd, error) {
 	dirs := []string{"home", "tmp", "cache"}
 	if runtime.GOOS == "windows" {
-		dirs = append(dirs, filepath.Join("home", "AppData", "Roaming"), filepath.Join("home", "AppData", "Local"))
+		dirs = append(dirs, filepath.Join("home", "AppData", "Roaming"), filepath.Join("home", "AppData", "Local"),
+			// Where Windows may point an AppContainer's TEMP and TMP, under
+			// its LOCALAPPDATA (scratch's): made, so they work either way.
+			filepath.Join("home", "AppData", "Local", "Packages", "ackn4th.sandbox", "AC", "Temp"))
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(filepath.Join(cfg.Scratch, d), 0o700); err != nil {

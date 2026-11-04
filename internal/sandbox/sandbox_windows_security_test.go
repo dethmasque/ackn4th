@@ -62,7 +62,7 @@ func TestProtectedDirsCannotBeReplaced(t *testing.T) {
 	}
 }
 
-// G4: owner-implicit rights must not let a command strip the deny entries.
+// G4: owner-implicit rights must not let a command undo the protected ACLs.
 func TestCannotChangeItsOwnACLs(t *testing.T) {
 	cfg, _ := setup(t)
 	run(t, cfg, `icacls .git /grant *S-1-1-0:(OI)(CI)F /T & icacls .git /reset /T & icacls .env /grant *S-1-1-0:F & icacls .env /reset & icacls . /reset /T`)

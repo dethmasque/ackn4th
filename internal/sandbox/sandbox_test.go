@@ -89,6 +89,14 @@ func TestConfinement(t *testing.T) {
 	if _, err := os.Stat(outside); err == nil {
 		t.Error("a file was written outside the workspace")
 	}
+	// TEMP is scratch's, not one Windows picked for the container.
+	if runtime.GOOS == "windows" {
+		sc, _ := filepath.EvalSymlinks(cfg.Scratch)
+		res := run(t, cfg, "echo %TEMP%")
+		if got := strings.TrimSpace(res.Output); !strings.HasPrefix(strings.ToLower(got), strings.ToLower(sc)) {
+			t.Errorf("TEMP is %s, not in scratch (%s)", got, sc)
+		}
+	}
 	if res := run(t, cfg, sh("env", "set")); strings.Contains(res.Output, "leaked") || !strings.Contains(res.Output, "HOME="+cfg.Scratch) && !strings.Contains(res.Output, filepath.FromSlash("/scratch/home")) {
 		t.Errorf("environment: %s", res.Output)
 	}
@@ -100,8 +108,22 @@ func TestReadOnlyAndNetwork(t *testing.T) {
 	if res := run(t, cfg, sh("echo hi > out.txt", "echo hi> out.txt")); res.ExitCode == 0 {
 		t.Error("a read-only role's command wrote the workspace")
 	}
-	if res := run(t, cfg, sh("cat .env.example && ls", "type .env.example && dir")); res.ExitCode != 0 {
-		t.Errorf("read-only commands should still read: %s", res.Output)
+	if res := run(t, cfg, sh("cat .env.example", "type .env.example")); res.ExitCode != 0 {
+		t.Errorf("read-only commands should still read files: %s", res.Output)
+	}
+	// cmd's for loop lists the directory and nothing else; dir also asks
+	// about the volume, which the sandbox may not reach.
+	if res := run(t, cfg, sh("ls -a", "for %f in (.* *) do @echo %f")); res.ExitCode != 0 || !strings.Contains(res.Output, ".env.example") {
+		t.Errorf("read-only commands should still list the workspace: exit %d: %s", res.ExitCode, res.Output)
+	}
+	if runtime.GOOS == "windows" {
+		// Diagnostics: what dir makes of the workspace, read-only and not.
+		for _, ro := range []bool{true, false} {
+			c := cfg
+			c.ReadOnly = ro
+			res := run(t, c, `dir /a /b & echo --- & dir`)
+			t.Logf("dir, read-only %v: exit %d:\n%s", ro, res.ExitCode, res.Output)
+		}
 	}
 	curl := sh("/usr/bin/curl", filepath.Join(os.Getenv("SystemRoot"), "System32", "curl.exe"))
 	if _, err := os.Stat(curl); err == nil {

@@ -11,9 +11,9 @@ sandbox on a real Windows runner** before Windows is released.
 | # | Invariant | Mac (Seatbelt) | Linux (bwrap) | Windows (AppContainer) |
 |---|-----------|----------------|---------------|------------------------|
 | C1 | Writes only in workspace + scratch (+Keep) | deny-default profile | ro root bind, rw binds | default-deny + allow ACE per capability |
-| C2 | `.git`, `.ackn4th` immutable, **including rename/replace of the dir itself** | `subpath` deny, also when absent | ro bind mount (EBUSY on rename) | deny ACE on existing dir only. **GAP G1, G2** |
+| C2 | `.git`, `.ackn4th` immutable, **including rename/replace of the dir itself** | `subpath` deny, also when absent | ro bind mount (EBUSY on rename) | protected ACL on the existing dir, sandbox read-only, re-checked every launch. **G2** |
 | C3 | Home secrets unreadable | deny rules | not mounted | default deny (AC has no user ACL access). Needs canary, **G6** |
-| C4 | Workspace credential files unreadable | deny rules | masked | deny-read ACE on files existing at launch |
+| C4 | Workspace credential files unreadable | deny rules | masked | protected ACL with no AppContainer access, on files existing at launch |
 | C5 | No network unless `commands.network` | deny network | `--unshare-net` | no `internetClient` caps, **but see G3** |
 | C6 | Host loopback services unreachable when network off | reachable (accepted, documented) | **unreachable** (own netns) | **reachable once loopback exempt, G3** |
 | C7 | Env rebuilt from allowlist | same code | same code | same code |
@@ -25,16 +25,17 @@ sandbox on a real Windows runner** before Windows is released.
 
 | Finding | State |
 |---------|-------|
-| G1 rename/replace of `.git` | fixed in code, unrun: grants are `DELETE` only (no `FILE_DELETE_CHILD`). Test `TestProtectedDirsCannotBeReplaced` |
+| G1 rename/replace of `.git` | fixed in code, unrun: grants are `DELETE` only (no `FILE_DELETE_CHILD`), and `.git` no longer inherits the grant at all (G15). Test `TestProtectedDirsCannotBeReplaced` |
 | G2 paths created after launch | accepted residual, document |
 | G3 profile-wide loopback exemption | open, needs owner decision: split profiles (recommended) vs documented opt-in |
-| G4 owner rights / DACL tampering | fixed in code, unrun: `denyWrite` includes WRITE_DAC\|WRITE_OWNER; test `TestCannotChangeItsOwnACLs` |
+| G4 owner rights / DACL tampering | fixed in code, unrun: no grant includes WRITE_DAC, and every launch restores the protected ACLs; test `TestCannotChangeItsOwnACLs` |
 | G5 nested launcher | mitigated (launcher refuses inside an AppContainer); test written, unrun |
 | G6 canary self-test | open |
 | G7 broad/permanent grants | partly mitigated (tool dirs no longer include ancestors of workspace/scratch/Keep); revoke command deferred |
 | G8 junctions | test written, unrun |
 | G10 (new) secret scan truncation | fixed: `secretFiles` fails closed past 250k entries |
-| G11 (new) `~/.cargo`, `.pyenv`, `.nvm` granted whole | fixed in code, unrun: credentials added to the hidden list; Windows tool-dir grants deny hidden paths inside them |
+| G11 (new) `~/.cargo`, `.pyenv`, `.nvm` granted whole | fixed in code, unrun: credentials added to the hidden list; hidden paths inside a tool-dir grant get a protected ACL with no AppContainer access |
+| G15 (round 5) deny ACEs ignored | CI showed every deny entry for a capability SID had no effect: the AppContainer access check ignores them. Fixed in code, unrun: protected paths (`.git`, `.ackn4th`, credential and hidden files, fixed CLI dirs) get a protected DACL with AppContainer access left out (`restrictDACL`, unit-tested on every OS) |
 | G12 (new) job object has no UI limits | fixed in code, unrun: `JobObjectBasicUIRestrictions` set in the launcher |
 | G13 (new) Windows device names as file-tool paths | fixed: `winDevice` in `internal/workspace`, unit-tested |
 
