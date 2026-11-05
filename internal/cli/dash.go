@@ -298,6 +298,8 @@ func (a *app) providerState(p string) dash.ProviderState {
 		signedIn = auth.HasGeminiKey() || auth.HasGrant(p)
 	case "openai":
 		signedIn = auth.HasOpenAIKey()
+	case "deepseek":
+		signedIn = auth.HasDeepSeekKey()
 	case "claude":
 		signedIn = auth.HasGrant(p)
 	default:
@@ -312,7 +314,7 @@ func (a *app) providerState(p string) dash.ProviderState {
 		if st.Detail == "" {
 			st.Detail = "ready"
 		}
-	case p == "openai":
+	case p == "openai" || p == "deepseek":
 		st.Detail = "needs an API key"
 	case p == "gemini" && a.cfg.Providers["gemini"].GeminiAuth() == config.GeminiKey:
 		st.Detail = "needs an API key"
@@ -390,10 +392,11 @@ func (a *app) formChoices(opt *dash.Options) error {
 // cliModels are suggested for the agent CLIs; "type a model id…" takes
 // any other.
 var cliModels = map[string][]string{
-	"codex":   {"gpt-5.3-codex", "gpt-5.2"},
-	"cursor":  {"composer-2.5", "gpt-5.3-codex", "claude-opus-5-thinking-high", "gpt-5.2"},
-	"copilot": {"claude-sonnet-5-5", "gpt-5.2"},
-	"openai":  {"gpt-5.2", "gpt-5-mini"},
+	"codex":    {"gpt-5.3-codex", "gpt-5.2"},
+	"cursor":   {"composer-2.5", "gpt-5.3-codex", "claude-opus-5-thinking-high", "gpt-5.2"},
+	"copilot":  {"claude-sonnet-5-5", "gpt-5.2"},
+	"openai":   {"gpt-5.2", "gpt-5-mini"},
+	"deepseek": {"deepseek-chat", "deepseek-reasoner"},
 }
 
 var claudeModels = []string{"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"}
@@ -403,6 +406,7 @@ var providerNotes = map[string]string{
 	"gemini":      "Google",
 	"claude-code": "your Claude plan, via local Claude Code",
 	"openai":      "OpenAI · API key",
+	"deepseek":    "DeepSeek · API key",
 	"codex":       "your ChatGPT plan, via the Codex CLI (sandboxed)",
 	"cursor":      "your Cursor plan, via the Cursor CLI (sandboxed)",
 	"copilot":     "your Copilot plan, via the Copilot CLI (sandboxed)",

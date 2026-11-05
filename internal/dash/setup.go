@@ -225,7 +225,7 @@ func (m *model) drawSetup(lines []string) string {
 		add("",
 			pText("Agents need a model provider. None is signed in yet."),
 			pDim("Use your Claude, ChatGPT, Cursor or Copilot plan through its CLI,"),
-			pDim("or an API key (Claude, Gemini, OpenAI)."),
+			pDim("or an API key (Claude, Gemini, OpenAI, DeepSeek)."),
 			"")
 		if m.opt.Voice != nil {
 			add(pDim("Accessibility: press ")+pLime("v")+pDim(" to have the dashboard read aloud."), "")

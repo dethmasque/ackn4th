@@ -22,6 +22,7 @@ import (
 	"github.com/dethmasque/ackn4th/internal/provider/claudecode"
 	"github.com/dethmasque/ackn4th/internal/provider/cliagent"
 	"github.com/dethmasque/ackn4th/internal/provider/clis"
+	"github.com/dethmasque/ackn4th/internal/provider/deepseek"
 	"github.com/dethmasque/ackn4th/internal/provider/gemini"
 	"github.com/dethmasque/ackn4th/internal/provider/mock"
 	"github.com/dethmasque/ackn4th/internal/provider/openai"
@@ -138,6 +139,12 @@ func (a *app) providerFor(spec task.AgentSpec) (provider.Provider, error) {
 			return nil, err
 		}
 		return openai.New(openai.Config{APIKey: key, Model: spec.Model, MaxTokens: spec.MaxTokens, Effort: spec.Effort, CompactAt: spec.CompactAt}), nil
+	case deepseek.Name:
+		key, err := auth.DeepSeekKey()
+		if err != nil {
+			return nil, err
+		}
+		return deepseek.New(deepseek.Config{APIKey: key, Model: spec.Model, MaxTokens: spec.MaxTokens, CompactAt: spec.CompactAt}), nil
 	case clis.CodexName, clis.CursorName, clis.CopilotName:
 		return cliagent.New(auth.CLIDriver(spec.Provider), spec.Model, spec.Effort), nil
 	case claudecode.Name:

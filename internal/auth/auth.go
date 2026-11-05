@@ -32,7 +32,7 @@ import (
 const service = "ackn4th"
 
 // Providers lists the supported agent providers.
-var Providers = []string{"claude", "gemini", "claude-code", "openai", "codex", "cursor", "copilot"}
+var Providers = []string{"claude", "gemini", "claude-code", "openai", "deepseek", "codex", "cursor", "copilot"}
 
 // ErrNotSignedIn means a provider has no credential ackn4th can use.
 var ErrNotSignedIn = errors.New("not signed in")
@@ -51,6 +51,8 @@ func Holds(provider string) bool {
 		return HasGeminiKey() || HasGrant(provider)
 	case "openai":
 		return HasOpenAIKey()
+	case "deepseek":
+		return HasDeepSeekKey()
 	}
 	return false
 }
@@ -59,7 +61,7 @@ func Holds(provider string) bool {
 // this asks the CLI, which takes a moment.
 func SignedIn(provider string) bool {
 	switch provider {
-	case "claude", "gemini", "openai":
+	case "claude", "gemini", "openai", "deepseek":
 		return Holds(provider)
 	}
 	return HasGrant(provider)
@@ -89,7 +91,7 @@ func Require(providers ...string) error {
 // ends, so for one it always passes.
 func StillHeld(provider string) error {
 	switch provider {
-	case "claude", "gemini", "openai":
+	case "claude", "gemini", "openai", "deepseek":
 		if !Holds(provider) {
 			return fmt.Errorf("%s was signed out (%w): run `ackn4th login --provider %s`, then resume the task", provider, ErrNotSignedIn, provider)
 		}

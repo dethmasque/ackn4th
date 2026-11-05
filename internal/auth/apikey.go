@@ -79,6 +79,56 @@ func geminiKeyGrant() (*Grant, error) {
 	return &Grant{Provider: "gemini", Account: "AI Studio API key …" + key[len(key)-4:], Source: SecretStore(), APIKey: true}, nil
 }
 
+// DeepSeekKeyURL is where users create a DeepSeek API key.
+const DeepSeekKeyURL = "https://platform.deepseek.com/api_keys"
+
+func deepSeekKeyEntry() string {
+	if h, ok := config.Sandbox(); ok {
+		return "sandbox:" + h + ":deepseek-api-key"
+	}
+	return "deepseek-api-key"
+}
+
+// ErrNoDeepSeekKey means no DeepSeek API key is stored.
+var ErrNoDeepSeekKey = errors.New("deepseek: no API key stored: run `ackn4th login --provider deepseek`")
+
+// SaveDeepSeekKey stores a DeepSeek API key, like SaveOpenAIKey: only in
+// the secret store, deleted on logout.
+func SaveDeepSeekKey(key string) error {
+	key = strings.TrimSpace(key)
+	if !strings.HasPrefix(key, "sk-") || len(key) < 20 || strings.ContainsAny(key, " \t\r\n\"'") {
+		return errors.New("that doesn't look like a DeepSeek API key (they start with sk-): create one at " + DeepSeekKeyURL)
+	}
+	return secretSet(service, deepSeekKeyEntry(), key)
+}
+
+// DeepSeekKey returns the stored DeepSeek API key.
+func DeepSeekKey() (string, error) {
+	key, err := secretGet(service, deepSeekKeyEntry())
+	if errors.Is(err, errNotFound) {
+		return "", ErrNoDeepSeekKey
+	}
+	if err != nil {
+		return "", fmt.Errorf("deepseek: read API key: %w", err)
+	}
+	return key, nil
+}
+
+// HasDeepSeekKey reports whether a DeepSeek API key is stored.
+func HasDeepSeekKey() bool {
+	_, err := DeepSeekKey()
+	return err == nil
+}
+
+// ForgetDeepSeekKey deletes the stored key; a missing key is not an error.
+func ForgetDeepSeekKey() error {
+	err := secretDelete(service, deepSeekKeyEntry())
+	if errors.Is(err, errNotFound) {
+		return nil
+	}
+	return err
+}
+
 // OpenAIKeyURL is where users create an OpenAI API key.
 const OpenAIKeyURL = "https://platform.openai.com/api-keys"
 

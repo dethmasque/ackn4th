@@ -186,6 +186,12 @@ func CurrentGrant(ctx context.Context, provider string) (*Grant, error) {
 			return nil, err
 		}
 		return &Grant{Provider: provider, Account: "API key …" + key[len(key)-4:], Source: SecretStore(), APIKey: true}, nil
+	case "deepseek":
+		key, err := DeepSeekKey()
+		if err != nil {
+			return nil, err
+		}
+		return &Grant{Provider: provider, Account: "API key …" + key[len(key)-4:], Source: SecretStore(), APIKey: true}, nil
 	case clis.CodexName, clis.CursorName, clis.CopilotName:
 		d := CLIDriver(provider)
 		who, err := d.Status(ctx)
@@ -412,7 +418,7 @@ func Login(ctx context.Context, provider, gcpProject string, in io.Reader, out i
 // error.
 func Revoke(provider string) error {
 	switch provider {
-	case claudecode.Name, "openai", clis.CodexName, clis.CursorName, clis.CopilotName:
+	case claudecode.Name, "openai", "deepseek", clis.CodexName, clis.CursorName, clis.CopilotName:
 		// Nothing to revoke: the OpenAI key is deleted by logout, and the
 		// CLIs keep their own logins.
 		return nil
