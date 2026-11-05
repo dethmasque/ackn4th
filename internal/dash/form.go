@@ -856,7 +856,7 @@ func (f *form) render(m *model, w, maxH int) string {
 		plines = []string{pFaint("Describe the task, e.g. “Add rate limiting to the API, with tests”")}
 	}
 	budget := maxH - 2
-	fixed := 15
+	fixed := 16
 	if f.team != nil {
 		fixed = 12 // the task's lines instead of its settings, no add button
 	}
@@ -961,15 +961,24 @@ func (f *form) renderSettings(add func(...string), gap func(), inner int, focuse
 	}
 	mode := onp(modeBg)(" " + radio("turns", !f.parallel) + "   " + radio("parallel", f.parallel) + " ")
 	pr := checkbox("draft PR when done", f.draftPR, focused("pr", 0))
-	left := pDim("MODE       ") + mode + pDim("     ROUNDS ") + textField(f.rounds, 6, focused("rounds", 0)) +
-		pDim("   CAP $") + textField(f.cost, 7, focused("cost", 0))
-	hint := ""
-	if room := inner - width(left) - width(pr) - 2; room >= 12 {
-		hint = pDim(fit("  0 = until every agent agrees", room))
-	} else {
+	build := func(hint string) string {
+		return pDim("MODE       ") + mode + pDim("     ROUNDS ") + textField(f.rounds, 6, focused("rounds", 0)) +
+			pDim(hint+"   CAP $") + textField(f.cost, 7, focused("cost", 0))
+	}
+	// The hint explains ROUNDS, so it follows that field; when the line is
+	// too narrow it moves to its own line below instead.
+	const hint = "  0 = until all agree"
+	left, below := build(hint), false
+	if width(left)+width(pr)+2 > inner {
 		pr = checkbox("draft PR", f.draftPR, focused("pr", 0))
 	}
-	add(left + hint + strings.Repeat(" ", max(1, inner-width(left)-width(hint)-width(pr)-1)) + pr)
+	if width(left)+width(pr)+2 > inner {
+		left, below = build(""), true
+	}
+	add(left + strings.Repeat(" ", max(1, inner-width(left)-width(pr)-1)) + pr)
+	if below {
+		add(pDim(fit("           ROUNDS:"+hint[1:], inner)))
+	}
 	gap()
 }
 
