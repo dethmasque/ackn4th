@@ -961,15 +961,21 @@ func (f *form) renderSettings(add func(...string), gap func(), inner int, focuse
 	}
 	mode := onp(modeBg)(" " + radio("turns", !f.parallel) + "   " + radio("parallel", f.parallel) + " ")
 	pr := checkbox("draft PR when done", f.draftPR, focused("pr", 0))
-	left := pDim("MODE       ") + mode + pDim("     ROUNDS ") + textField(f.rounds, 6, focused("rounds", 0)) +
-		pDim("   CAP $") + textField(f.cost, 7, focused("cost", 0))
-	hint := ""
-	if room := inner - width(left) - width(pr) - 2; room >= 12 {
-		hint = pDim(fit("  0 = until every agent agrees", room))
-	} else {
-		pr = checkbox("draft PR", f.draftPR, focused("pr", 0))
+	// The "0 = ..." hint belongs to ROUNDS, so it sits right after it, before
+	// CAP; it is dropped (the help panel and field tip say it) when tight.
+	const hintText = " 0 = all agree"
+	build := func(hint string) string {
+		return pDim("MODE       ") + mode + pDim("     ROUNDS ") + textField(f.rounds, 6, focused("rounds", 0)) +
+			hint + pDim("   CAP $") + textField(f.cost, 7, focused("cost", 0))
 	}
-	add(left + hint + strings.Repeat(" ", max(1, inner-width(left)-width(hint)-width(pr)-1)) + pr)
+	left := build(pDim(hintText))
+	if inner-width(left)-width(pr)-2 < 1 {
+		left = build("")
+		if inner-width(left)-width(pr)-2 < 1 {
+			pr = checkbox("draft PR", f.draftPR, focused("pr", 0))
+		}
+	}
+	add(left + strings.Repeat(" ", max(1, inner-width(left)-width(pr)-1)) + pr)
 	gap()
 }
 

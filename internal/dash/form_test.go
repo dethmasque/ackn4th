@@ -86,6 +86,25 @@ func TestFormRendersEveryState(t *testing.T) {
 	}
 }
 
+// The "0 = ..." hint explains ROUNDS, so it sits between ROUNDS and CAP.
+func TestFormRoundsHintBesideRounds(t *testing.T) {
+	var launched []NewTask
+	m := newModel(formOptions(task.NewStore(t.TempDir()), &launched))
+	m.Update(tea.WindowSizeMsg{Width: 200, Height: 60})
+	press(m, "n")
+	for _, l := range strings.Split(ansi.Strip(m.render()), "\n") {
+		if !strings.Contains(l, "ROUNDS") {
+			continue
+		}
+		r, h, c := strings.Index(l, "ROUNDS"), strings.Index(l, "0 = "), strings.Index(l, "CAP $")
+		if !(r < h && h < c) {
+			t.Fatalf("want ROUNDS < hint < CAP: %q", l)
+		}
+		return
+	}
+	t.Fatal("no ROUNDS row")
+}
+
 func TestFormBuildsTheTask(t *testing.T) {
 	var launched []NewTask
 	m := newModel(formOptions(task.NewStore(t.TempDir()), &launched))
