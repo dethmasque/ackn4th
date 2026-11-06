@@ -19,6 +19,7 @@ var pastedSamples = map[string]string{
 	"lone cr":   "progress 10%\rprogress 50%\rprogress 100%",
 	"escape":    "\x1b[31mred\x1b[0m text \x1b]0;title\x07 here",
 	"wide":      strings.Repeat("日本語のテキスト、", 30),
+	"mods":     strings.Repeat("👍🏻👍🏼👍🏽👍🏾👍🏿👋🏻👋🏼👋🏽👋🏾👋🏿",50),   
 	"emoji":     strings.Repeat("ok 👍🏽 ", 40),
 	"long line": strings.Repeat("x", 500),
 	"long url":  "see https://example.com/" + strings.Repeat("a/b", 100),

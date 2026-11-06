@@ -109,7 +109,7 @@ func cleanText(s string) string {
 			return r
 		case r == '\r':
 			return '\n'
-		case unicode.IsControl(r) || r == ' ' || r == ' ':
+		case unicode.IsControl(r) || r == '\u0020' || r == '\u00a0':
 			return -1
 		}
 		return r
