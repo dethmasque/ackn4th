@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -123,7 +124,9 @@ func TestMessageTeamChecks(t *testing.T) {
 	if len(entries) != 1 || strings.HasPrefix(entries[0].Name(), ".") {
 		t.Fatalf("mailbox = %v", entries)
 	}
-	if info, _ := entries[0].Info(); info.Mode().Perm() != 0o600 {
+	// Windows has no mode bits to check: Go reports every writable file
+	// as 0666, and the file is private through the data directory's ACL.
+	if info, _ := entries[0].Info(); runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Errorf("a message file should be private: %v", info.Mode())
 	}
 	p, err := readPost(filepath.Join(s.MailboxDir("k1"), entries[0].Name()))
