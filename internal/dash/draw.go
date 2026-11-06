@@ -119,7 +119,7 @@ func providerColor(p string) rgb {
 	case "copilot":
 		return pink
 	}
-	return violet
+	return lime
 }
 
 // pill is a label on a colored background.

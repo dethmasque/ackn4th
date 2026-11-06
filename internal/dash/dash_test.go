@@ -2,11 +2,13 @@ package dash
 
 import (
 	"encoding/json"
-	"github.com/charmbracelet/x/ansi"
+	"math"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -142,6 +144,57 @@ func TestLiveView(t *testing.T) {
 	m.poll()
 	if !strings.Contains(m.render(), "waiting on the model") {
 		t.Error("an agent with no live output should say it is waiting")
+	}
+}
+
+const minColorDistance = 85.0
+
+func colorDistance(c1, c2 rgb) float64 {
+	rMean := (float64(c1.r) + float64(c2.r)) / 2.0
+	dR := float64(c1.r) - float64(c2.r)
+	dG := float64(c1.g) - float64(c2.g)
+	dB := float64(c1.b) - float64(c2.b)
+
+	weightR := 2.0 + rMean/256.0
+	weightG := 4.0
+	weightB := 2.0 + (255.0-rMean)/256.0
+
+	return math.Sqrt(weightR*dR*dR + weightG*dG*dG + weightB*dB*dB)
+}
+
+// TestProviderColorsDistinct checks that provider colors are distinct
+// enough to the human eye. We are more sensitive to changes to green,
+// so it is weighted higher than red and blue.
+func TestProviderColorsDistinct(t *testing.T) {
+	providers := []string{
+		"claude",
+		"gemini",
+		"claude-code",
+		"openai",
+		"deepseek",
+		"codex",
+		"cursor",
+		"copilot",
+		"unknown-provider",
+	}
+
+	for i := 0; i < len(providers); i++ {
+		for j := i + 1; j < len(providers); j++ {
+			p1, p2 := providers[i], providers[j]
+			c1, c2 := providerColor(p1), providerColor(p2)
+			if c1 == c2 {
+				t.Errorf("%q and %q share the exact same color (%+v)", p1, p2, c1)
+				continue
+			}
+
+			if dist := colorDistance(c1, c2); dist < minColorDistance {
+				t.Errorf(
+					"%q (%+v) and %q (%+v) are too visually similar: distance %.1f (minimum %.1f)",
+					p1, c1, p2, c2, dist, minColorDistance,
+				)
+			}
+
+		}
 	}
 }
 
