@@ -335,7 +335,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.key(msg.String())
 	case tea.PasteMsg:
 		if m.settingsTyping() {
-			m.settings.edit.insert(strings.TrimSpace(msg.Content))
+			m.settings.edit.insert(strings.TrimSpace(strings.ReplaceAll(cleanText(msg.Content), "\n", " ")))
 		} else if m.roles != nil {
 			m.rolePaste(msg.Content)
 		} else if m.form != nil {

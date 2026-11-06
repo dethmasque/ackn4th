@@ -97,8 +97,27 @@ func newInput(s string) input { r := []rune(s); return input{r: r, cur: len(r)} 
 
 func (in *input) String() string { return string(in.r) }
 
+// cleanText makes pasted text safe to lay out: line endings become "\n",
+// tabs become spaces, and other control characters (escape sequences
+// included) are dropped, since a terminal would draw them at widths the
+// editor can't measure and spill past the field's border.
+func cleanText(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n':
+			return r
+		case r == '\r':
+			return '\n'
+		case unicode.IsControl(r) || r == ' ' || r == ' ':
+			return -1
+		}
+		return r
+	}, strings.ReplaceAll(s, "\t", "    "))
+}
+
 func (in *input) insert(s string) {
-	add := []rune(s)
+	add := []rune(cleanText(s))
 	in.r = append(in.r[:in.cur], append(add, in.r[in.cur:]...)...)
 	in.cur += len(add)
 }
@@ -551,7 +570,7 @@ func (f *form) paste(s string) {
 	if in == nil {
 		return
 	}
-	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = cleanText(s)
 	switch {
 	case cur.kind == "rounds", cur.kind == "cost":
 		s = strings.Map(func(r rune) rune {
@@ -1101,7 +1120,7 @@ func (f *form) promptLine(up bool) bool {
 	col := ansi.StringWidth(string(in.r[spans[at][0]:in.cur]))
 	in.cur = spans[to][0]
 	for w := 0; in.cur < spans[to][1]; in.cur++ {
-		cw := ansi.StringWidth(string(in.r[in.cur]))
+		cw := cellWidth(in.r[in.cur])
 		if w+cw > col {
 			break
 		}
@@ -1125,6 +1144,17 @@ func cursorLine(in input, w int) int {
 	return len(spans) - 1
 }
 
+// cellWidth is the cells a rune adds to a line: one at least, except for
+// emoji skin-tone modifiers, variation selectors and joiners, which
+// merge into the character before them.
+func cellWidth(r rune) int {
+	switch {
+	case r >= 0x1F3FB && r <= 0x1F3FF, r >= 0xFE00 && r <= 0xFE0F, r == 0x200D:
+		return 0
+	}
+	return max(1, ansi.StringWidth(string(r)))
+}
+
 // softWrap lays text out in lines of at most limit cells, as [start, end)
 // rune spans. Lines break after a space where they can; the space stays at
 // the line's end (the editor keeps a spare column for it and the cursor).
@@ -1137,7 +1167,7 @@ func softWrap(r []rune, limit int) [][2]int {
 	for {
 		col, brk, i := 0, -1, start
 		for ; i < len(r) && r[i] != '\n'; i++ {
-			cw := max(1, ansi.StringWidth(string(r[i])))
+			cw := cellWidth(r[i])
 			if col+cw > limit {
 				break
 			}
@@ -1246,11 +1276,18 @@ func editorLines(in input, w int, focused bool) []string {
 	for _, sp := range softWrap(r, w-1) {
 		var b strings.Builder
 		for i := sp[0]; i < sp[1]; i++ {
-			if focused && i == in.cur {
-				b.WriteString(cursor(fgp(bg0)(string(r[i]))))
-			} else {
-				b.WriteString(pText(string(r[i])))
+			// Joiners and modifiers are drawn with the character they
+			// follow, so the terminal merges them as softWrap assumed.
+			s, j := drawable(r[i]), i+1
+			for ; j < sp[1] && cellWidth(r[j]) == 0; j++ {
+				s += string(r[j])
 			}
+			if focused && in.cur >= i && in.cur < j {
+				b.WriteString(cursor(fgp(bg0)(s)))
+			} else {
+				b.WriteString(pText(s))
+			}
+			i = j - 1
 		}
 		// The cursor after a line's last character: at a newline or the
 		// end of the text.
@@ -1260,6 +1297,16 @@ func editorLines(in input, w int, focused bool) []string {
 		lines = append(lines, b.String())
 	}
 	return lines
+}
+
+// drawable is r as the editor draws it: control characters (from text
+// saved before pastes were cleaned) show as a space, the one cell
+// softWrap counts for them.
+func drawable(r rune) string {
+	if unicode.IsControl(r) {
+		return " "
+	}
+	return string(r)
 }
 
 // textField is a single-line input, w cells wide.
