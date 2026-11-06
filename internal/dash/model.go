@@ -37,6 +37,9 @@ type Options struct {
 	// agent's role, model and effort from now on (providers unchanged). It
 	// may return *LoginRequired.
 	FollowUp func(t *task.Task, prompt string, team []NewAgent) error
+	// Message sends a running task's team a message from the person: to
+	// is a role or "all". The task keeps running.
+	Message func(t *task.Task, to, text string) error
 
 	// Launch starts a task from the new-task form in the background and
 	// returns its ID; nil hides the form. It may return *LoginRequired.
@@ -123,6 +126,9 @@ type model struct {
 	live  map[string]*Live
 	sel   int // selected task
 	agent int // selected agent; -1 = all (activity, messages)
+	// src narrows the activity log to the person's or ackn4th's own
+	// events instead of an agent's; agent is -1 then.
+	src source
 
 	view      view
 	focusMain bool
@@ -344,6 +350,16 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case followUpMsg:
 		m.form = nil
 		return m, m.resume(msg.r)
+	case messageSentMsg:
+		if m.form != nil && m.form.message {
+			m.form.busy = false
+			if msg.err != nil {
+				m.form.err = msg.err.Error()
+				return m, nil
+			}
+			m.form = nil
+			m.say("sent to " + msg.to + " · each agent gets it with its next request; the task keeps running")
+		}
 	case launchedMsg:
 		if m.form != nil && m.form.launched(msg) {
 			m.form = nil
@@ -552,6 +568,7 @@ func (m *model) setView(v view) {
 	}
 	m.view, m.scroll, m.follow = v, 0, true
 	m.focusMain = true
+	m.src = srcAgent
 	if v == vActivity || v == vMessages {
 		m.agent = -1
 	} else if m.agent < 0 {
@@ -585,6 +602,7 @@ func (m *model) pickTask(d int) {
 	if m.agent >= 0 {
 		m.agent = 0
 	}
+	m.src = srcAgent
 	if l := m.current(); l != nil {
 		m.read(l)
 	}
@@ -599,8 +617,15 @@ func (m *model) pickAgent(d int) {
 	}
 	// -1 is "all" in activity and messages, and the task's summary (its
 	// prompt and how it ended) on the overview.
+	if m.view == vActivity {
+		// all, you, ackn4th, then each agent
+		stops := 3 + len(l.Agents)
+		m.setFilterPos((m.filterPos() + d + stops) % stops)
+		m.scroll, m.follow = 0, true
+		return
+	}
 	lo, n := 0, len(l.Agents)
-	if m.view == vActivity || m.view == vMessages || m.view == vOverview {
+	if m.view == vMessages || m.view == vOverview {
 		lo, n = -1, n+1
 	}
 	m.agent = (m.agent-lo+d+n)%n + lo

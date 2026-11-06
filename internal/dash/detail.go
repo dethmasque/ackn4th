@@ -41,6 +41,68 @@ func eventIdx(l *Live, agent int) []int {
 	return out
 }
 
+// source is whose events the activity log shows besides an agent's.
+type source int
+
+const (
+	srcAgent  source = iota // m.agent's, or everyone's when it is -1
+	srcYou                  // the person's: follow-ups and messages
+	srcSystem               // ackn4th's own: task and round markers, notices
+)
+
+// filterPos is the activity filter's place in its cycle: all, you,
+// ackn4th, then each agent.
+func (m *model) filterPos() int {
+	switch {
+	case m.src == srcYou:
+		return 1
+	case m.src == srcSystem:
+		return 2
+	case m.agent < 0:
+		return 0
+	}
+	return m.agent + 3
+}
+
+func (m *model) setFilterPos(p int) {
+	m.src, m.agent = srcAgent, -1
+	switch {
+	case p == 1:
+		m.src = srcYou
+	case p == 2:
+		m.src = srcSystem
+	case p >= 3:
+		m.agent = p - 3
+	}
+}
+
+// logIdx is eventIdx for the activity log's filter, which may be the
+// person or ackn4th rather than an agent.
+func (m *model) logIdx(l *Live) []int {
+	if m.src == srcAgent {
+		return eventIdx(l, m.agent)
+	}
+	var out []int
+	for i, e := range l.Events {
+		if e.Agent != 0 {
+			continue
+		}
+		if e.ByUser() == (m.src == srcYou) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// logEvents is the activity log's events under its filter.
+func (m *model) logEvents(l *Live) []event.Event {
+	var out []event.Event
+	for _, i := range m.logIdx(l) {
+		out = append(out, l.Events[i])
+	}
+	return out
+}
+
 // selected is the activity cursor's place in a list of n events: the
 // newest while following.
 func (m *model) selected(n int) int {
@@ -57,7 +119,7 @@ func (m *model) moveEvent(d int) {
 	if l == nil {
 		return
 	}
-	n := len(eventIdx(l, m.agent))
+	n := len(m.logIdx(l))
 	if n == 0 {
 		return
 	}
@@ -71,7 +133,7 @@ func (m *model) openDetail() {
 	if l == nil {
 		return
 	}
-	idx := eventIdx(l, m.agent)
+	idx := m.logIdx(l)
 	if len(idx) == 0 {
 		return
 	}
@@ -103,7 +165,7 @@ func (m *model) detailKey(k string) {
 			break
 		}
 		// The previous or next event in the list the cursor walks.
-		idx := eventIdx(l, m.agent)
+		idx := m.logIdx(l)
 		pos := 0
 		for i, at := range idx {
 			if at <= m.open.at {
@@ -238,7 +300,7 @@ func (m *model) detailBox(w, h int) string {
 		who = fgp(providerColor(spec.Provider))(spec.Role) + pDim(" · "+spec.Provider+" · "+spec.Model)
 	}
 	head := []string{"", " " + pDim(e.Time.Local().Format("Jan 2 15:04:05")+fmt.Sprintf(" · round %d · ", e.Round)) + who, ""}
-	idx := eventIdx(l, m.agent)
+	idx := m.logIdx(l)
 	pos := 0
 	for i, at := range idx {
 		if at <= m.open.at {
