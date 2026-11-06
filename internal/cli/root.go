@@ -144,7 +144,7 @@ func (a *app) providerFor(spec task.AgentSpec) (provider.Provider, error) {
 		if err != nil {
 			return nil, err
 		}
-		return deepseek.New(deepseek.Config{APIKey: key, Model: spec.Model, MaxTokens: spec.MaxTokens, CompactAt: spec.CompactAt}), nil
+		return deepseek.New(deepseek.Config{APIKey: key, Model: spec.Model, MaxTokens: spec.MaxTokens, Effort: spec.Effort, CompactAt: spec.CompactAt}), nil
 	case clis.CodexName, clis.CursorName, clis.CopilotName:
 		return cliagent.New(auth.CLIDriver(spec.Provider), spec.Model, spec.Effort), nil
 	case claudecode.Name:

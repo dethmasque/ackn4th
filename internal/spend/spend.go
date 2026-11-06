@@ -50,9 +50,11 @@ var Prices = map[string]Price{
 		Above: 200_000, Long: &Price{Input: 4, Cached: 0.40, Output: 18}},
 	"gpt-5.2":    {Input: 1.75, Cached: 0.175, Output: 14},
 	"gpt-5-mini": {Input: 0.25, Cached: 0.025, Output: 2},
-	// DeepSeek lists one price per model; cache hits cost a fraction of misses.
-	"deepseek-chat":     {Input: 0.28, Cached: 0.028, Output: 0.42},
-	"deepseek-reasoner": {Input: 0.28, Cached: 0.028, Output: 0.42},
+	// DeepSeek charges double in its peak hours (weekdays 01:00-04:00 and
+	// 06:00-10:00 UTC). These are the peak prices, so a spending cap holds
+	// at any hour; off-peak work is overestimated.
+	"deepseek-flash":  {Input: 0.30, Output: 1.20},
+	"deepseek-v4-pro": {Input: 1.32, Cached: 0.044, Output: 3.96},
 }
 
 // Billed are the providers charged per token. The rest run on the

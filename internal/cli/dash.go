@@ -396,7 +396,7 @@ var cliModels = map[string][]string{
 	"cursor":   {"composer-2.5", "gpt-5.3-codex", "claude-opus-5-thinking-high", "gpt-5.2"},
 	"copilot":  {"claude-sonnet-5-5", "gpt-5.2"},
 	"openai":   {"gpt-5.2", "gpt-5-mini"},
-	"deepseek": {"deepseek-chat", "deepseek-reasoner"},
+	"deepseek": {"deepseek-flash", "deepseek-v4-pro"},
 }
 
 var claudeModels = []string{"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"}

@@ -109,7 +109,7 @@ provider.go    the provider-neutral interface every adapter implements
 claude/        Anthropic API (Messages, prompt caching, server-side compaction)
 gemini/        Gemini API (AI Studio key or Vertex AI)
 openai/        OpenAI Responses API (stateless; model probing: PickModel)
-deepseek/      DeepSeek API (OpenAI-compatible Chat Completions, API key)
+deepseek/      DeepSeek API (OpenAI-compatible Responses API, stateless, API key)
 claudecode/    local Claude Code as the model loop, with its own tools off
 cliagent/      Codex, Cursor and Copilot, run inside the OS sandbox
 clis/          the agent CLIs' install checks and sign-in commands
