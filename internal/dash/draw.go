@@ -54,6 +54,7 @@ var (
 	skyblue   = hex("#8cc8ff")
 	neutral   = hex("#e6e6e6")
 	grass     = hex("#10a37f")
+	whale     = hex("#4d6bfe")
 	red       = hex("#ff5f6d")
 	white     = hex("#ecfff0")
 )
@@ -107,6 +108,8 @@ func providerColor(p string) rgb {
 		return coral
 	case "openai":
 		return grass
+	case "deepseek":
+		return whale
 	case "codex":
 		return skyblue
 	case "cursor":
@@ -114,7 +117,7 @@ func providerColor(p string) rgb {
 	case "copilot":
 		return pink
 	}
-	return violet
+	return lime
 }
 
 // pill is a label on a colored background.

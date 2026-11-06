@@ -37,9 +37,11 @@ ackn4th start-task --parallel --roles backend_dev,qa_engineer,code_reviewer \
 Or via the dashboard, opened when running the binary directly without 
 commands (`./ackn4th` from the install directory).
 
+<img width="1882" height="1118" alt="Screenshot 2026-11-04 at 18 58 16" src="https://github.com/user-attachments/assets/3b4312a3-e366-4e6c-9d2e-a867b653f381" />
+
 Agents run on your existing plans through their CLIs (**Claude Code**,
 **Codex**, **Cursor**, **Copilot**) or on API keys (**Claude**, **Gemini**,
-**OpenAI**). 
+**OpenAI**, **DeepSeek**). 
 
 > **A hobby project, for hobbyists.** `ackn4th` is for quickly putting together
 > a team of software-development agents that iterates on a prompt until the
@@ -157,11 +159,14 @@ name a provider and its CLI is signed in, `ackn4th` uses the CLI.
 | **Claude** (`claude`) | Anthropic API credits |
 | **Gemini** (`gemini`) | Google AI Studio (free tier) |
 | **OpenAI** (`openai`) | OpenAI API credits |
+| **DeepSeek** (`deepseek`) | DeepSeek API credits |
 
 How to sign in to each, and how to choose models and efforts per agent:
 [internal/provider/README.md](internal/provider/README.md).
 
 ## First run
+
+<img width="941" height="1115" alt="Screenshot 2026-11-04 at 18 57 06" src="https://github.com/user-attachments/assets/b1fca6bb-0552-4d7f-81a7-54d3cbc52448" />
 
 Agents work in the current directory. The first time they work in a
 directory, `ackn4th` asks you to **trust** it, since agents read it and send
@@ -217,7 +222,7 @@ Every command, flag and the scripting (CI) mode:
 
 ## Keeping costs in check
 
-Agents on an API key (Claude, Gemini, OpenAI) cost money with every
+Agents on an API key (Claude, Gemini, OpenAI, DeepSeek) cost money with every
 request; agents on your plan through a CLI (Claude Code, Codex, Cursor,
 Copilot) use its limits instead. `ackn4th` estimates what each request 
 costs and can stop a task before it spends more than you allow:

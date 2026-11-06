@@ -179,6 +179,9 @@ func Default() Config {
 		"claude-code": {Model: "claude-sonnet-5-5", MaxTokens: 64000, Effort: "medium", CompactAt: 200000},
 		// No OpenAI model until login picks one the key can use.
 		"openai": {MaxTokens: 32000, Effort: "medium", CompactAt: 200000},
+		// DeepSeek maps medium and xhigh effort to high; its Responses API
+		// serves deepseek-flash and deepseek-v4-pro.
+		"deepseek": {Model: "deepseek-flash", MaxTokens: 8192, Effort: "high", CompactAt: 100000},
 		// Agent CLIs on the user's own plans. "default" (Codex) and "auto"
 		// let the CLI pick the model; they manage output and compaction.
 		"codex":   {Model: "default", MaxTokens: 64000, CompactAt: 200000},

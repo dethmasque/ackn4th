@@ -46,7 +46,8 @@ private to ackn4th, so your everyday ant login is never touched. Requests use
 short-lived access tokens that refresh automatically.
 
 OpenAI uses an API key (` + auth.OpenAIKeyURL + `), pasted when asked
-or piped on stdin, and stored like the Gemini key.
+or piped on stdin, and stored like the Gemini key. DeepSeek works the same
+way (` + auth.DeepSeekKeyURL + `).
 
 Gemini, by default, uses an API key from Google AI Studio
 (` + auth.GeminiKeyURL + `): sign in with your Google account, create a
@@ -85,7 +86,7 @@ signed in just checks it still works.`,
 			return err
 		},
 	}
-	cmd.Flags().StringArrayVar(&providers, "provider", nil, "`provider` to sign in to (repeatable): claude, gemini, openai, claude-code, codex, cursor, copilot (default: ask, or all off a terminal)")
+	cmd.Flags().StringArrayVar(&providers, "provider", nil, "`provider` to sign in to (repeatable): claude, gemini, openai, deepseek, claude-code, codex, cursor, copilot (default: ask, or all off a terminal)")
 	cmd.Flags().BoolVar(&reauth, "reauth", false, "sign in again (or replace an API key) even if already authorized")
 	cmd.Flags().StringVar(&gcpProject, "gcp-project", "", "use Gemini on Vertex AI in this GCP `project` instead of an AI Studio key (saved to config.yaml)")
 	cmd.Flags().BoolVar(&pause, "pause", false, "wait for enter before exiting (used by the dashboard)")
@@ -109,6 +110,7 @@ func login(cmd *cobra.Command, a *app, providers []string, reauth bool, gcpProje
 			{"gemini", "Google · AI Studio key (or Vertex AI)"},
 			{"claude-code", "your Claude plan · via your local Claude Code"},
 			{"openai", "OpenAI · API key"},
+			{"deepseek", "DeepSeek · API key"},
 			{"codex", "your ChatGPT plan · via the Codex CLI"},
 			{"cursor", "your Cursor plan · via the Cursor CLI"},
 			{"copilot", "your Copilot plan · via the Copilot CLI"},
@@ -264,6 +266,13 @@ func loginProvider(ctx context.Context, a *app, p string, reauth, newKey bool) (
 			}
 		}
 		how = "API key verified (" + auth.SecretStore() + "; rate-limit aware)"
+	case p == "deepseek":
+		if reauth || !auth.HasDeepSeekKey() {
+			if err := askDeepSeekKey(a); err != nil {
+				return err
+			}
+		}
+		how = "API key verified (" + auth.SecretStore() + "; rate-limit aware)"
 	case p == claudecode.Name:
 		if err := a.missingTool(p); err != nil {
 			return err
@@ -403,6 +412,17 @@ func askOpenAIKey(a *app) error {
 	}, auth.SaveOpenAIKey)
 }
 
+// askDeepSeekKey is askGeminiKey for DeepSeek.
+func askDeepSeekKey(a *app) error {
+	t := a.term
+	return askKey(a, "deepseek", "DEEPSEEK API KEY", []string{
+		"1. Open " + t.Lime(auth.DeepSeekKeyURL) + " and sign in",
+		"2. Create new API key",
+		"3. Paste it below " + t.Gray("(hidden; stored only in your "+auth.SecretStore()+")"),
+		t.Gray("The API is billed per token: top up your balance first."),
+	}, auth.SaveDeepSeekKey)
+}
+
 // askKey reads an API key without echoing it, or from piped stdin, and
 // saves it.
 func askKey(a *app, prov, title string, steps []string, save func(string) error) error {
@@ -518,7 +538,7 @@ done with them.`,
 			return nil
 		},
 	}
-	cmd.Flags().StringSliceVar(&only, "provider", nil, "sign out of just this `provider` (repeatable): claude, gemini, openai, claude-code, codex, cursor, copilot")
+	cmd.Flags().StringSliceVar(&only, "provider", nil, "sign out of just this `provider` (repeatable): claude, gemini, openai, deepseek, claude-code, codex, cursor, copilot")
 	return cmd
 }
 
@@ -534,13 +554,13 @@ func forgetProvider(a *app, p string) {
 	revoked, keyErr := forget(p)
 	if revoked != nil {
 		t.Println(t.Amber("! "), revoked.Error())
-	} else if p != "openai" {
+	} else if p != "openai" && p != "deepseek" {
 		t.Println(t.Green("✓ "), name, " grant revoked")
 	}
 	switch {
 	case keyErr != nil:
 		t.Println(t.Amber("! "), keyErr.Error())
-	case p == "gemini" || p == "openai":
+	case p == "gemini" || p == "openai" || p == "deepseek":
 		t.Println(t.Green("✓ "), name, " API key deleted from "+auth.SecretStore())
 	}
 }
@@ -553,6 +573,8 @@ func forget(p string) (revokeErr, keyErr error) {
 		keyErr = auth.ForgetGeminiKey()
 	case "openai":
 		keyErr = auth.ForgetOpenAIKey()
+	case "deepseek":
+		keyErr = auth.ForgetDeepSeekKey()
 	}
 	return revokeErr, keyErr
 }

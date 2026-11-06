@@ -180,7 +180,7 @@ agent the discovery. An `AGENTS.md` in the project is quoted in every brief.
 ## Spending caps
 
 A runaway agent costs money, so ackn4th can cap what agents spend on the
-providers that bill per token (claude, gemini, openai). Agent CLIs on your
+providers that bill per token (claude, gemini, openai, deepseek). Agent CLIs on your
 own plan (claude-code, codex, cursor, copilot) cost nothing here: their
 plans have usage limits of their own. Set caps under `spend:` in the
 [config](../config/README.md); none are set by default.

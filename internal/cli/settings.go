@@ -66,7 +66,7 @@ func (a *app) settings() []dash.Setting {
 			Help: "How many tool calls an agent may make in one turn before it is asked to hand off."},
 
 		{Section: "Spending caps", Key: "spend.per_task", Label: "Each task", Kind: dash.Text, Value: num(c.Spend.PerTask), Unit: "dollars", Empty: "no cap",
-			Help: "Caps one task's estimated spending over its whole life, unless it was started with its own cap. Billed providers only: claude, gemini, openai."},
+			Help: "Caps one task's estimated spending over its whole life, unless it was started with its own cap. Billed providers only: claude, gemini, openai, deepseek."},
 		{Section: "Spending caps", Key: "spend.daily", Label: "All providers, a day", Kind: dash.Text, Value: num(c.Spend.Daily), Unit: "dollars", Empty: "no cap",
 			Help: "Caps what every task together spends in a day, on every billed provider. A task that reaches it stops, resumably. Each provider's own caps are in its section."},
 		{Section: "Spending caps", Key: "spend.monthly", Label: "All providers, a month", Kind: dash.Text, Value: num(c.Spend.Monthly), Unit: "dollars", Empty: "no cap",

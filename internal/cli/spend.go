@@ -16,7 +16,7 @@ func spendCmd(a *app) *cobra.Command {
 		Use:     "spend",
 		GroupID: "info",
 		Short:   "Show what agents spent today and this month, and the caps",
-		Long: `Show the estimated spending on billed providers (claude, gemini, openai)
+		Long: `Show the estimated spending on billed providers (claude, gemini, openai, deepseek)
 today and this month, in all and by provider, beside the caps set under
 spend: in the config. Estimates come from the token counts each provider
 reports and its prices per million tokens; providers' own bills are the

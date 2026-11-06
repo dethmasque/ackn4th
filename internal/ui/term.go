@@ -88,6 +88,8 @@ func (t *Term) ProviderColor(provider, s string) string {
 		return t.style(coral, s)
 	case "openai":
 		return t.Green(s)
+	case "deepseek":
+		return t.style("\x1b[38;2;77;107;254m", s)
 	case "codex":
 		return t.style("\x1b[38;2;140;200;255m", s)
 	case "cursor":
