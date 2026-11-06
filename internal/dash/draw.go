@@ -54,11 +54,9 @@ var (
 	skyblue   = hex("#8cc8ff")
 	neutral   = hex("#e6e6e6")
 	grass     = hex("#10a37f")
-	// whale is DeepSeek's electric blue: saturated and cool, so it stands
-	// out against the green phosphor surfaces and the other providers.
-	whale = hex("#4d6bfe")
-	red   = hex("#ff5f6d")
-	white = hex("#ecfff0")
+	whale     = hex("#4d6bfe")
+	red       = hex("#ff5f6d")
+	white     = hex("#ecfff0")
 )
 
 // Paint functions reset only what they set (foreground, background, bold),
