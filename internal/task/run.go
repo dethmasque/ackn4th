@@ -43,14 +43,15 @@ type run struct {
 	t *Task
 
 	// mu guards t, sh and the inbox once agents may work concurrently.
-	mu     sync.Mutex
-	roles  []*role.Role
-	agents []*agent.Agent
-	labels []string // how each agent is credited for changes
-	view   *workspace.Workspace
-	book   *notes.Book
-	sh     *shared
-	closer []func() error
+	mu      sync.Mutex
+	roles   []*role.Role
+	agents  []*agent.Agent
+	labels  []string // how each agent is credited for changes
+	members []string // each agent's role, as messages address them
+	view    *workspace.Workspace
+	book    *notes.Book
+	sh      *shared
+	closer  []func() error
 
 	systems []provider.System // each agent's system prompt
 	tools   []provider.ToolSpec
@@ -137,6 +138,7 @@ func (r *Runner) setup(t *Task) (*run, error) {
 		team[i] = agent.Member{Role: rl, Provider: spec.Provider, Model: spec.Model}
 		members[i] = rl.Name
 	}
+	rn.members = members
 	for i, spec := range t.Agents {
 		label := spec.Role
 		if strings.Count(","+strings.Join(members, ",")+",", ","+spec.Role+",") > 1 {
@@ -376,30 +378,47 @@ func (rn *run) send(from, to int, text string) error {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
 	t := rn.t
-	id := 1
-	for _, m := range t.Inbox {
-		id = max(id, m.ID+1)
+	if from < 1 || from > len(t.Agents) {
+		return fmt.Errorf("no agent %d to send from", from) // never the person: see Mail.User
 	}
-	t.Inbox = append(t.Inbox, Mail{ID: id, From: from, To: to, Round: t.Round, Text: text, Time: time.Now().UTC()})
+	t.Inbox = append(t.Inbox, Mail{ID: nextMailID(t.Inbox), From: from, To: to, Round: t.Round, Text: text, Time: time.Now().UTC()})
 	return rn.r.Store.Save(t)
 }
 
-// inbox formats agent n's undelivered messages. The returned ack removes
-// them once they have been sent to the model.
+// inbox formats agent n's undelivered messages: the person's first, then
+// teammates'. The returned ack removes them once they have been sent to
+// the model. Messages the person left since the last request are
+// collected first, so they arrive mid-turn.
 func (rn *run) inbox(n int) (string, func()) {
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
-	var b strings.Builder
+	rn.collect()
+	var user, team strings.Builder
 	var ids []int
 	for _, m := range rn.t.Inbox {
 		if m.To != n {
 			continue
 		}
-		if b.Len() == 0 {
-			b.WriteString("# Messages from teammates\n")
+		switch {
+		case m.User:
+			fmt.Fprintf(&user, "\n%s\n", m.Text)
+		case m.From >= 1 && m.From <= len(rn.t.Agents):
+			a := rn.t.Agents[m.From-1]
+			fmt.Fprintf(&team, "\n**%s** (%s): %s\n", a.Role, a.Provider, m.Text)
+		default:
+			// No valid sender (a zero From without User, or an agent
+			// that no longer exists): drop it rather than guess who sent it.
 		}
-		fmt.Fprintf(&b, "\n**%s** (%s): %s\n", rn.t.Agents[m.From-1].Role, rn.t.Agents[m.From-1].Provider, m.Text)
 		ids = append(ids, m.ID)
+	}
+	var b strings.Builder
+	if user.Len() > 0 {
+		b.WriteString("# Message from the person who gave the task\nThey sent this while you were working. It takes precedence over the plan so far: adjust your current work to it, and tell teammates if it changes what they should do.\n")
+		b.WriteString(user.String())
+	}
+	if team.Len() > 0 {
+		b.WriteString("\n# Messages from teammates\n")
+		b.WriteString(team.String())
 	}
 	return strings.TrimSpace(b.String()), func() {
 		if len(ids) == 0 {
@@ -724,7 +743,7 @@ func (rn *run) sequential(ctx context.Context) error {
 		if err := rn.r.Store.Save(t); err != nil {
 			return err
 		}
-		if allDone(t) {
+		if rn.agreed() {
 			t.Reason = summary(t)
 			return nil
 		}
@@ -801,7 +820,7 @@ func (rn *run) parallel(ctx context.Context) error {
 		}
 
 		// The round is complete.
-		if allDone(t) {
+		if rn.agreed() {
 			t.Reason = summary(t)
 			return nil
 		}

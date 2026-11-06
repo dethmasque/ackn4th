@@ -22,6 +22,7 @@ import (
 	"github.com/dethmasque/ackn4th/internal/provider/claudecode"
 	"github.com/dethmasque/ackn4th/internal/provider/openai"
 	"github.com/dethmasque/ackn4th/internal/task"
+	"github.com/dethmasque/ackn4th/internal/tools"
 	"github.com/dethmasque/ackn4th/internal/ui"
 	"github.com/dethmasque/ackn4th/internal/workspace"
 )
@@ -794,6 +795,72 @@ and the task's history carry over.`,
 	cmd.Flags().StringVarP(&note, "note", "n", "", "guidance `text` for the next agent")
 	cmd.Flags().StringVar(&prov, "provider", "", "move every agent to this `provider` first, e.g. claude-code")
 	return cmd
+}
+
+func messageTeamCmd(a *app) *cobra.Command {
+	var to string
+	cmd := &cobra.Command{
+		Use:     "message-team <task> [message]",
+		GroupID: "tasks",
+		Aliases: []string{"message", "msg"},
+		Short:   "Message a running task's team without stopping it",
+		Long: `Send a message to the agents of a running task. The task keeps running:
+each agent gets the message with its next request to its model, as soon
+as its current step (a reply, or a command such as a test run) finishes,
+ahead of anything a teammate sent. A team that had agreed
+it was done has to agree again once the message has been read.
+
+--to sends it to one role instead of everyone. To change a task that has
+finished, use follow-up.`,
+		Example: `  ackn4th message-team k3f9qz "Use the existing logger, not fmt.Println"
+  ackn4th message-team k3f9qz --to code_reviewer "Check the migration too"`,
+		Args: upTo(2, "<task> [message]"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			tk, err := a.taskArg(args, func(tk *task.Task) bool { return tk.Status == task.Running })
+			if err != nil {
+				return err
+			}
+			a.store.Reconcile(tk)
+			if tk.Status != task.Running {
+				return fmt.Errorf("task %s isn't running: give it more work with `ackn4th follow-up %s`", tk.Label(), tk.ID)
+			}
+			if err := checkRecipient(tk, to); err != nil {
+				return err
+			}
+			msg := ""
+			if len(args) > 1 {
+				msg = args[1]
+			}
+			if strings.TrimSpace(msg) == "" {
+				msg, err = a.ask(usageError{errors.New("missing the message")}, "message to the team", nil)
+				if err != nil {
+					return err
+				}
+			}
+			if err := a.store.MessageTeam(tk.ID, to, msg, time.Now()); err != nil {
+				return err
+			}
+			a.term.Println(a.term.Green("✓ "), "sent to ", a.term.Bold(cmp.Or(to, "all")), a.term.Gray(" · each agent gets it with its next request; watch with "), a.term.Lime("ackn4th watch-task "+tk.ID))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&to, "to", "", "send to just this `role` (default: every agent)")
+	return cmd
+}
+
+// checkRecipient checks a message's --to names one of tk's roles.
+func checkRecipient(tk *task.Task, to string) error {
+	if strings.TrimSpace(to) == "" {
+		return nil
+	}
+	var roles []string
+	for _, a := range tk.Agents {
+		roles = append(roles, a.Role)
+	}
+	if len(tools.Targets(roles, to)) == 0 {
+		return fmt.Errorf("task %s has no %q agent: use one of %s, or all", tk.Label(), to, strings.Join(roles, ", "))
+	}
+	return nil
 }
 
 func followUpCmd(a *app) *cobra.Command {

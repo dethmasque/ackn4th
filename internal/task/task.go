@@ -167,10 +167,14 @@ func (t *Task) OpenTodos() []Todo {
 // ModeParallel runs every agent's turn of a round at the same time.
 const ModeParallel = "parallel"
 
-// Mail is a message from one agent to another, sent with message_teammate.
+// Mail is a message to an agent: from a teammate, sent with
+// message_teammate, or from the person, sent while the task runs.
 type Mail struct {
-	ID    int       `json:"id"`
-	From  int       `json:"from"` // 1-based agent index
+	ID   int `json:"id"`
+	From int `json:"from"` // the sending agent, 1-based; 0 when User
+	// User marks a message from the person. It is set explicitly, never
+	// inferred from From: a zero From on its own is invalid, not the user.
+	User  bool      `json:"user,omitempty"`
 	To    int       `json:"to"`
 	Round int       `json:"round"`
 	Text  string    `json:"text"`

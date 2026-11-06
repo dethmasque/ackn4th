@@ -110,7 +110,10 @@ func (r *renderer) Handle(e event.Event) {
 		r.line(t.Gray(fmt.Sprintf("» %s · %s", verb, e.Time.Local().Format("15:04:05"))))
 
 	case event.FollowUp:
-		r.line(t.Cyan("↪ follow-up ") + t.Gray(ui.Truncate(strings.Join(strings.Fields(e.Text), " "), 100)))
+		r.line(t.Cyan("↪ you · follow-up ") + t.Gray(ui.Truncate(strings.Join(strings.Fields(e.Text), " "), 100)))
+
+	case event.UserMessage:
+		r.line(t.Cyan("✉ you → "+e.Detail+" ") + t.Gray(ui.Truncate(strings.Join(strings.Fields(e.Text), " "), 100)))
 
 	case event.RoundStarted:
 		label := fmt.Sprintf("ROUND %d", e.Round)

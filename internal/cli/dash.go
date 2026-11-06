@@ -152,10 +152,13 @@ func (a *app) dashOptions(ctx context.Context, focus string, speak *bool) (dash.
 		Resume:   a.resumeBackground,
 		Delete:   func(tk *task.Task) error { return a.store.Delete(tk.ID) },
 		FollowUp: a.followUpBackground,
-		Launch:   func(req dash.NewTask) (string, error) { return a.dashLaunch(ctx, req) },
-		Login:    loginCommand,
-		Setup:    a.dashSetup(),
-		Voice:    v,
+		Message: func(tk *task.Task, to, text string) error {
+			return a.store.MessageTeam(tk.ID, to, text, time.Now())
+		},
+		Launch: func(req dash.NewTask) (string, error) { return a.dashLaunch(ctx, req) },
+		Login:  loginCommand,
+		Setup:  a.dashSetup(),
+		Voice:  v,
 
 		RoleAdmin: a.dashRoles(ctx),
 		Settings:  a.dashSettings(firstRun),
