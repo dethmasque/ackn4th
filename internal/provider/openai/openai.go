@@ -1,5 +1,5 @@
 // Package openai implements provider.Provider with the OpenAI Responses
-// API and an API key. Requests set store to false: OpenAI keeps no
+// API and an API key, on OpenAI or (base_url) another API in its format. Requests set store to false: OpenAI keeps no
 // conversation, and ackn4th saves it with the task as usual.
 //
 // Requests go through a rate-limit gate shared by every agent on the same
@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -47,7 +48,8 @@ type Config struct {
 	// CompactAt is the prompt size, in tokens, past which the conversation
 	// is summarized at the start of the next turn (0 never).
 	CompactAt int64
-	// BaseURL overrides the endpoint, for tests only.
+	// BaseURL is another API in the Responses format (providers.openai.
+	// base_url, already checked); empty is OpenAI.
 	BaseURL string
 }
 
@@ -82,7 +84,7 @@ func (p *Provider) Verify(ctx context.Context) error {
 	if p.cfg.Model == "" {
 		return ErrNoModel
 	}
-	return describe(p.probe(ctx, p.cfg.Model))
+	return p.describe(p.probe(ctx, p.cfg.Model))
 }
 
 // probe sends model a tiny request with a tool, as an agent's would be.
@@ -111,7 +113,7 @@ func (p *Provider) PickModel(ctx context.Context) (string, error) {
 		}
 	}
 	if err := iter.Err(); err != nil {
-		return "", describe(err)
+		return "", p.describe(err)
 	}
 	slices.SortStableFunc(models, func(a, b openai.Model) int {
 		return cmp.Or(cmp.Compare(tier(a.ID), tier(b.ID)), cmp.Compare(b.Created, a.Created), strings.Compare(a.ID, b.ID))
@@ -127,7 +129,7 @@ func (p *Provider) PickModel(ctx context.Context) (string, error) {
 		}
 		var apiErr *openai.Error
 		if !errors.As(err, &apiErr) || apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusTooManyRequests {
-			return "", describe(err) // the key or the network, not the model
+			return "", p.describe(err) // the key or the network, not the model
 		}
 		// Messages name the model: without it, equal reasons group.
 		why := strings.ReplaceAll(strings.TrimRight(apiErr.Message, ". "), m.ID, "this model")
@@ -330,7 +332,7 @@ func (s *session) compact(ctx context.Context) (provider.Usage, error) {
 	p.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsNone)}
 	resp, err := s.p.client.Responses.New(ctx, p, input)
 	if err != nil {
-		return cost, fmt.Errorf("compacting context: %w", describe(err))
+		return cost, fmt.Errorf("compacting context: %w", s.p.describe(err))
 	}
 	cost = usage(resp.Usage)
 	summary := resp.OutputText()
@@ -412,6 +414,10 @@ func (s *session) send(ctx context.Context, st provider.Stream) (*provider.Reply
 			if st.Text != nil && ev.Delta != "" {
 				st.Text(ev.Delta)
 			}
+		case "response.reasoning_text.delta": // compatible APIs show their reasoning
+			if st.Thinking != nil && ev.Delta != "" {
+				st.Thinking(ev.Delta)
+			}
 		case "response.output_item.added":
 			if ev.Item.Type == "function_call" && st.ToolInput != nil {
 				st.ToolInput(ev.Item.Name, "")
@@ -430,7 +436,7 @@ func (s *session) send(ctx context.Context, st provider.Stream) (*provider.Reply
 		}
 	}
 	if err := stream.Err(); err != nil {
-		return nil, describe(err)
+		return nil, s.p.describe(err)
 	}
 	if failed != "" {
 		return nil, errors.New("openai: " + failed)
@@ -470,7 +476,12 @@ func (s *session) record(resp *responses.Response) *provider.Reply {
 		switch o.Type {
 		case "reasoning":
 			if o.EncryptedContent == "" {
-				continue // useless without store
+				// Compatible APIs (DeepSeek) return reasoning as text instead,
+				// and refuse a tool loop's history without it.
+				if it := plainReasoning(o); it != nil {
+					s.items = append(s.items, it)
+				}
+				continue // OpenAI's is useless without store
 			}
 			summary := o.Summary // an array, sent back as it came
 			if len(summary) == 0 || string(summary) == "null" {
@@ -515,8 +526,26 @@ func (s *session) record(resp *responses.Response) *provider.Reply {
 	return reply
 }
 
+// plainReasoning keeps a reasoning item's text, or nil when it has none.
+func plainReasoning(o outItem) json.RawMessage {
+	var parts []map[string]string
+	for _, c := range o.Content {
+		if c.Text != "" {
+			parts = append(parts, map[string]string{"type": "reasoning_text", "text": c.Text})
+		}
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	it := map[string]any{"type": "reasoning", "summary": []any{}, "content": parts}
+	if o.ID != "" {
+		it["id"] = o.ID
+	}
+	return jsonItem(it)
+}
+
 // describe turns API errors into short messages. The key is never included.
-func describe(err error) error {
+func (p *Provider) describe(err error) error {
 	if err == nil {
 		return nil
 	}
@@ -525,7 +554,13 @@ func describe(err error) error {
 		msg := apiErr.Message
 		switch apiErr.StatusCode {
 		case http.StatusUnauthorized:
-			return errors.New("openai: the API key was rejected: run `ackn4th login --provider openai` with a new one from " + KeyURL)
+			if u, perr := url.Parse(p.cfg.BaseURL); perr == nil && u.Host != "" {
+				// Another API's message often says which key it saw (****1a2b).
+				return fmt.Errorf("openai: %s rejected the API key (%s): run `ackn4th login --provider openai --reauth` with a valid one", u.Host, cmpOr(msg, "HTTP 401"))
+			}
+			return errors.New("openai: the API key was rejected: run `ackn4th login --provider openai --reauth` with a new one from " + KeyURL)
+		case http.StatusPaymentRequired: // DeepSeek, out of balance
+			return errors.New("openai: out of API credits: top up the account's balance: " + cmpOr(msg, "insufficient balance"))
 		case http.StatusTooManyRequests:
 			if strings.Contains(apiErr.Code, "insufficient_quota") {
 				return errors.New("openai: out of API credits: add billing at https://platform.openai.com/settings/organization/billing")
