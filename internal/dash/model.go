@@ -17,6 +17,12 @@ import (
 
 // Options configures a dashboard.
 type Options struct {
+	// State is where task records, events and live previews are read
+	// from: the configured backend (a controller, for a remote daemon), or Store
+	// when nil, which is what every local run gets.
+	State task.Backend
+	// Store holds the artifacts that live on the machine running the
+	// runner: log paths and scratch dirs. State reads task state.
 	Store *task.Store
 	// Focus preselects a task by ID or unique prefix.
 	Focus string
@@ -186,9 +192,18 @@ func (m *model) Init() tea.Cmd {
 	return tick()
 }
 
+// state is the backend task state is read from: the configured one, or
+// the local data dir when none was given.
+func (o *Options) state() task.Backend {
+	if o.State != nil {
+		return o.State
+	}
+	return o.Store
+}
+
 // poll reloads task records and reads new events.
 func (m *model) poll() {
-	tasks, err := m.opt.Store.List()
+	tasks, err := m.opt.state().List()
 	if err != nil {
 		m.err = err
 		return
@@ -206,9 +221,12 @@ func (m *model) poll() {
 		selID = cur.Task.ID
 	}
 	m.tasks = tasks
+	// The backend answered: a poll error from an earlier tick is stale, and a
+	// banner that outlives its cause is worse than none (R63).
+	m.err = nil
 	m.sel = 0
 	for i, t := range tasks {
-		m.opt.Store.Reconcile(t)
+		m.opt.state().Reconcile(t)
 		if t.ID == selID {
 			m.sel = i
 		}
@@ -226,7 +244,7 @@ func (m *model) poll() {
 }
 
 func (m *model) read(l *Live) {
-	evs, off, err := m.opt.Store.ReadEvents(l.Task.ID, l.off)
+	evs, off, err := m.opt.state().ReadEvents(l.Task.ID, l.off)
 	if err != nil {
 		return
 	}
@@ -235,7 +253,7 @@ func (m *model) read(l *Live) {
 		l.Apply(e)
 	}
 	l.sync(l.Task) // the record wins over replayed history
-	l.readLive(m.opt.Store)
+	l.readLive(m.opt.state())
 }
 
 func (m *model) current() *Live {
