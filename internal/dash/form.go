@@ -109,7 +109,9 @@ func cleanText(s string) string {
 			return r
 		case r == '\r':
 			return '\n'
-		case unicode.IsControl(r) || r == '\u0020' || r == '\u00a0':
+		// U+2028 and U+2029, the Unicode line and paragraph separators, are
+		// invisible and would break lines the editor doesn't know about.
+		case unicode.IsControl(r) || r == '\u2028' || r == '\u2029':
 			return -1
 		}
 		return r
