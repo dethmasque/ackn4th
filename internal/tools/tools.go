@@ -230,6 +230,20 @@ type Team struct {
 	writer map[string]int // path → agent who changed it last in this run
 }
 
+// Targets resolves a message's "to" against the team's members: the
+// 1-based agents it names, or everyone for "all" (or "everyone"). The
+// sender is not left out: callers drop themselves.
+func Targets(members []string, to string) []int {
+	to = strings.ToLower(strings.TrimSpace(to))
+	var out []int
+	for i, m := range members {
+		if to == "all" || to == "everyone" || strings.EqualFold(m, to) {
+			out = append(out, i+1)
+		}
+	}
+	return out
+}
+
 func (t *Team) changed(agent int, p string) {
 	if t.writer == nil {
 		t.writer = map[string]int{}
@@ -609,11 +623,10 @@ func (e *Executor) Run(ctx context.Context, call provider.ToolCall) Result {
 		if e.Team == nil || e.Team.Send == nil || len(e.Team.Members) < 2 {
 			return fail("you have no teammates in this task")
 		}
-		to := strings.ToLower(strings.TrimSpace(in.To))
 		var targets []int
-		for i, m := range e.Team.Members {
-			if i+1 != e.Self && (to == "all" || to == "everyone" || strings.EqualFold(m, to)) {
-				targets = append(targets, i+1)
+		for _, n := range Targets(e.Team.Members, in.To) {
+			if n != e.Self {
+				targets = append(targets, n)
 			}
 		}
 		if len(targets) == 0 {

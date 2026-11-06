@@ -151,7 +151,7 @@ func (m *model) footer() string {
 	case m.flash != "" && time.Since(m.flashAt) < 4*time.Second:
 		return fill(" "+pAmber("▸ ")+pText(m.flash), m.w, bg0)
 	}
-	keys := [][2]string{{"↑↓", "move"}, {"tab", "panel"}, {"←→", "agent"}, {"⏎", "zoom"}, {"e", "expand"}, {"c", "copy"}, {"1-4", "tabs"}, {"[ ]", "task"}, {"f", "follow"}, {"s", "stop"}, {"r", "resume"}, {"a", "follow-up"}, {"x", "delete"}, {"n", "new"}, {"p", "providers"}, {"R", "roles"}, {"C", "config"}, {"t", "tour"}, {"?", "help"}, {"q", "quit"}}
+	keys := [][2]string{{"↑↓", "move"}, {"tab", "panel"}, {"←→", "agent"}, {"⏎", "zoom"}, {"e", "expand"}, {"c", "copy"}, {"1-4", "tabs"}, {"[ ]", "task"}, {"f", "follow"}, {"s", "stop"}, {"r", "resume"}, {"a", "message / follow-up"}, {"x", "delete"}, {"n", "new"}, {"p", "providers"}, {"R", "roles"}, {"C", "config"}, {"t", "tour"}, {"?", "help"}, {"q", "quit"}}
 	switch {
 	case m.open != nil && m.open.task:
 		keys = [][2]string{{"↑↓", "scroll"}, {"c", "copy it all"}, {"esc", "close"}}
@@ -702,6 +702,9 @@ func (m *model) eventLines(l *Live, e event.Event, w, n int) []string {
 // eventParts is an event's time and who, and what happened.
 func (m *model) eventParts(l *Live, e event.Event) (lead, what string) {
 	who := pDim(fit("ackn4th", 14))
+	if e.ByUser() {
+		who = fgp(cyan)(fit("you", 14))
+	}
 	if e.Agent > 0 && e.Agent <= len(l.Task.Agents) {
 		spec := l.Task.Agents[e.Agent-1]
 		who = fgp(providerColor(spec.Provider))(fit(spec.Role, 14))
@@ -711,6 +714,8 @@ func (m *model) eventParts(l *Live, e event.Event) (lead, what string) {
 		what = pGreen("■ task " + e.Text)
 	case event.FollowUp:
 		what = bold(fgp(cyan)("↪ follow-up ")) + pText(oneLine(e.Text))
+	case event.UserMessage:
+		what = bold(fgp(cyan)("✉ to "+e.Detail+" ")) + pText(oneLine(e.Text))
 	case event.RoundStarted:
 		what = bold(pGreen(fmt.Sprintf("━━━ ROUND %d ━━━", e.Round)))
 	case event.TurnStarted:
@@ -748,36 +753,53 @@ func (m *model) eventParts(l *Live, e event.Event) (lead, what string) {
 	return pFaint(e.Time.Local().Format("15:04:05")) + " " + pDim(fmt.Sprintf("r%-2d", e.Round)) + " " + who + " ", what
 }
 
-// filterBar shows which agent the log is filtered to.
-func (m *model) filterBar(l *Live) string {
-	var b strings.Builder
-	b.WriteString(pDim("←→ "))
-	for i := -1; i < len(l.Task.Agents); i++ {
-		name, c := "all", lime
-		if i >= 0 {
-			name, c = l.Task.Agents[i].Role, providerColor(l.Task.Agents[i].Provider)
-		}
-		if i == m.agent {
-			b.WriteString(pill(name, c, bg0) + " ")
-		} else {
-			b.WriteString(pill(name, bg2, dim) + " ")
-		}
+// filterBar shows whose events the log is filtered to, in at most w
+// cells: the activity log can show the person's or ackn4th's alone, the
+// messages tab only agents'. When every choice doesn't fit, it shows the
+// selected one and where it is in the cycle.
+func (m *model) filterBar(l *Live, w int) string {
+	type stop struct {
+		name string
+		c    rgb
+		pos  int // m.filterPos's value for it
 	}
+	stops := []stop{{"all", lime, 0}}
+	if m.view == vActivity {
+		stops = append(stops, stop{"you", cyan, 1}, stop{"ackn4th", dim, 2})
+	}
+	for i, a := range l.Task.Agents {
+		stops = append(stops, stop{a.Role, providerColor(a.Provider), i + 3})
+	}
+	cur := m.filterPos()
+	var tail string
 	if m.follow {
-		b.WriteString("  " + pGreen("● following"))
+		tail = "  " + pGreen("● following")
 	} else {
-		b.WriteString("  " + pDim("○ paused · f"))
+		tail = "  " + pDim("○ paused · f")
 	}
 	if m.focusMain && m.view == vActivity {
-		b.WriteString(pDim("  ⏎ details · c copies"))
+		tail += pDim("  ⏎ details · c copies")
 	}
-	return b.String()
+	var all, one strings.Builder
+	for i, s := range stops {
+		if s.pos == cur {
+			all.WriteString(pill(s.name, s.c, bg0) + " ")
+			one.WriteString(pill(s.name, s.c, bg0) + pDim(fmt.Sprintf(" %d/%d ", i+1, len(stops))))
+		} else {
+			all.WriteString(pill(s.name, bg2, dim) + " ")
+		}
+	}
+	bar := pDim("←→ ") + all.String() + tail
+	if width(bar) > w {
+		bar = pDim("←→ ") + one.String() + tail
+	}
+	return bar
 }
 
 func (m *model) activity(l *Live, w, h int) []string {
-	evs := filterEvents(l, m.agent)
+	evs := m.logEvents(l)
 	if len(evs) == 0 {
-		return []string{m.filterBar(l), "", pDim("no activity yet")}
+		return []string{m.filterBar(l, w), "", pDim("no activity yet")}
 	}
 	// Each event wraps onto up to three lines; enter shows the rest.
 	rows, sel := max(1, h-2), m.selected(len(evs))
@@ -819,7 +841,7 @@ func (m *model) activity(l *Live, w, h int) []string {
 	if len(out) > rows {
 		out = out[:rows]
 	}
-	return append([]string{m.filterBar(l), ""}, out...)
+	return append([]string{m.filterBar(l, w), ""}, out...)
 }
 
 func (m *model) messages(l *Live, w, h int) []string {
@@ -839,7 +861,7 @@ func (m *model) messages(l *Live, w, h int) []string {
 	if len(lines) == 0 {
 		lines = []string{pDim("no handoff messages yet")}
 	}
-	return append([]string{m.filterBar(l), ""}, m.scrolled(lines, h-2)...)
+	return append([]string{m.filterBar(l, w), ""}, m.scrolled(lines, h-2)...)
 }
 
 func (m *model) files(l *Live, w int) []string {
@@ -1109,7 +1131,7 @@ var helpRows = [][2]string{
 	{"pgup pgdn g G", "page · top · bottom (and follow)"},
 	{"f", "follow new activity on / off"},
 	{"s  r  x", "stop · resume · delete a task (each asks first)"},
-	{"a", "follow-up: more work for a finished task's team"},
+	{"a", "message a running task's team; on a finished one, a follow-up"},
 	{"n", "new task: agents, models, efforts and a prompt"},
 	{"p  R", "providers (sign in or out) · roles (add, edit, import)"},
 	{"C", "configuration: spending caps, limits, models, voice"},

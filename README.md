@@ -214,6 +214,7 @@ ackn4th login                      # pick providers from a numbered list
 ackn4th start-task --name "Rate limiting" --roles backend_dev,code_reviewer --max-cost 5 \
   "Add rate limiting to the API, with tests"
 ackn4th watch-task "Rate limiting" # follow a task by name (or ID); ctrl+c detaches
+ackn4th message-team "Rate limiting" "Use the existing Redis client" # tell the team, without stopping it
 ackn4th logout --provider openai   # sign out of one provider (or all, without --provider)
 ```
 

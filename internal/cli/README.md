@@ -19,6 +19,7 @@ elsewhere.
 | `watch-task <task>` | Follow a running task live (ctrl+c detaches) |
 | `stop-task <task>` | Gracefully stop a running task (foreground or background) |
 | `resume-task <task> [--rounds n] [--max-cost dollars] [--note "…"] [--provider p] [-d]` | Continue a stopped/failed task (`--provider` moves its agents, e.g. to `claude-code`; `--max-cost` lets it spend that much more), or attach to a running one |
+| `message-team <task> ["message"] [--to role]` | Message a running task's agents without stopping it: each gets the message with its next request to its model, ahead of teammates' messages. A team that had agreed it was done must agree again once it's read |
 | `follow-up <task> ["prompt"] [--rounds n] [--max-cost dollars] [-d]` | Give a task that isn't running (completed too) more work: the same agents continue with their conversations and the workspace, every agent gets the prompt, and all must declare done again |
 | `list-tasks [--all]` | Table of tasks, by name: the 20 latest, or all, with tokens and estimated cost |
 | `rename-task <task> <name>` | Give a task a new name (works while it runs) |

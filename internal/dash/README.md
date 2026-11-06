@@ -58,8 +58,10 @@ while a task runs. Quitting it never stops a task.
   The agent's card says the same in one line (`✎ write_file src/trace.js ·
   8.2 KB so far`). Gemini replies all at once, so it has nothing live to
   show.
-- **2 Activity** is the full log, filterable by agent (`←→`), following new
-  events (`f`). A long line wraps onto up to three. `↑↓` select a line and **enter** opens it with everything
+- **2 Activity** is the full log, following new events (`f`). `←→` filter
+  it: everything, **you** (your follow-ups and messages to the team),
+  **ackn4th** (the task's own events: starts, rounds, notices), or one
+  agent. Your lines are labelled `you`, ackn4th's `ackn4th`. A long line wraps onto up to three. `↑↓` select a line and **enter** opens it with everything
   the log has on it: for a tool call or a failure, the agent's reasoning
   just before, the call's arguments in full (a whole command, say) and
   what came back to the model. `←→` step to the previous or next event,
@@ -109,7 +111,7 @@ address after them), in handoffs, details and the activity log.
 | `f` | follow new activity on / off |
 | `s` | stop the task (it saves state; resume any time) |
 | `r` | resume a stopped task in the background |
-| `a` | follow-up: give a task that isn't running more work, and optionally other roles, models or efforts for its agents (the same agents continue; all must declare done again) |
+| `a` | on a running task: message its team without stopping it (start with `@role` for one agent). Otherwise a follow-up: give a task that isn't running more work, and optionally other roles, models or efforts for its agents (the same agents continue; all must declare done again) |
 | `x` | delete a task's records (its workspace files stay) |
 | `n` | new task |
 | `p` | providers: see which are ready, sign in or out |

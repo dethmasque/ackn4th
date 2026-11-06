@@ -40,6 +40,16 @@ ackn4th start-task --parallel --roles backend_dev,frontend_dev,qa_engineer \
 - **Messages mid-turn.** `message_teammate` reaches a teammate who is
   working right now, alongside their next tool results. Each round's closing
   messages go to everyone at the start of the next round.
+- **Messages from you.** `message-team` (or `a` on a running task in the
+  dashboard) reaches the agents the same way, mid-turn, without stopping
+  the task, and ahead of their teammates' messages. Each message is a file
+  in the task's `to-team/` directory, in ackn4th's data directory: the
+  runner, possibly in another process, collects it under the same lock as
+  teammates' messages, so nothing is lost or overwritten. Agents can't
+  write there (it is outside the workspace and their scratch directories),
+  so they can't forge a message from you. The task can't finish with your
+  message unread: if every agent had declared done, the votes are called
+  off and the team must agree again after reading it.
 - **No lost work.** An agent can only change a file whose current version it
   knows (read in full, written itself, or seen as a diff). If a teammate
   changed it in the meantime, the write fails with who changed it, and the

@@ -107,3 +107,58 @@ func TestFollowUpChangesTheTeam(t *testing.T) {
 		t.Errorf("team %+v", team)
 	}
 }
+
+type messageCall struct{ id, to, text string }
+
+// a on a running task messages its team, without stopping it.
+func TestMessageDialog(t *testing.T) {
+	var launched []NewTask
+	var sent []messageCall
+	opt := formOptions(fixture(t), &launched)
+	opt.FollowUp = func(*task.Task, string, []NewAgent) error { return nil }
+	opt.Message = func(tk *task.Task, to, text string) error {
+		sent = append(sent, messageCall{tk.ID, to, text})
+		return nil
+	}
+	m := newModel(opt)
+	for _, size := range [][2]int{{80, 22}, {160, 50}} {
+		sent = nil
+		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		m.tasks[0].Status = task.Running
+		m.Update(keyMsg("a"))
+		if m.form == nil || !m.form.message {
+			t.Fatal("a on a running task should open the message form")
+		}
+		checkScreen(t, m, size, "MESSAGE THE TEAM")
+		checkScreen(t, m, size, "SEND")
+		m.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+		if len(sent) != 0 || !strings.Contains(m.form.err, "write the message") {
+			t.Fatalf("an empty message shouldn't send: %q", m.form.err)
+		}
+		m.Update(tea.PasteMsg{Content: "@nobody hi"})
+		m.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+		if len(sent) != 0 || !strings.Contains(m.form.err, `no "nobody" agent`) {
+			t.Fatalf("an unknown @role shouldn't send: %q", m.form.err)
+		}
+		m.form.prompt = newInput("@" + m.tasks[0].Agents[0].Role + " Use the existing logger")
+		_, cmd := m.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+		if cmd == nil {
+			t.Fatal("ctrl+s should send")
+		}
+		m.Update(cmd())
+		want := messageCall{"k3f9qz", m.tasks[0].Agents[0].Role, "Use the existing logger"}
+		if m.form != nil || len(sent) != 1 || sent[0] != want {
+			t.Fatalf("sent %+v, want %+v", sent, want)
+		}
+		if !strings.Contains(m.flash, "keeps running") {
+			t.Errorf("flash %q", m.flash)
+		}
+		m.Update(keyMsg("a"))
+		m.form.prompt = newInput("Everyone: stop touching main.go")
+		_, cmd = m.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+		m.Update(cmd())
+		if len(sent) != 2 || sent[1].to != "all" {
+			t.Fatalf("without @ it goes to everyone: %+v", sent)
+		}
+	}
+}

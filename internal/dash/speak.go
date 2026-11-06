@@ -281,7 +281,7 @@ func (m *model) whereMain() string {
 			s += " " + m.whereAgent(l, i, false) + " Enter zooms in."
 		}
 	case vActivity:
-		if evs := filterEvents(l, m.agent); len(evs) > 0 {
+		if evs := m.logEvents(l); len(evs) > 0 {
 			i := m.selected(len(evs))
 			s += fmt.Sprintf(" Event %d of %d, %s Enter shows its details.", i+1, len(evs), m.spokenEvent(l, evs[i], false))
 		} else {

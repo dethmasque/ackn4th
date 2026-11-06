@@ -202,3 +202,91 @@ func TestCLIFailureInFull(t *testing.T) {
 		t.Errorf("a summary that says more is dropped: %q", got)
 	}
 }
+
+// The activity log tells the person's events from ackn4th's: follow-ups
+// and messages are "you", and each has its own filter stop.
+func TestYouAndAckn4thFilters(t *testing.T) {
+	store := fixture(t)
+	now := time.Now()
+	for i, e := range []event.Event{
+		{Kind: event.TaskStarted, Text: "resume"},
+		{Kind: event.FollowUp, Text: "Also document DELETE"},
+		{Kind: event.ToolCall, Agent: 1, Role: "backend_dev", Tool: "read_file", Text: "api.go"},
+		{Kind: event.UserMessage, Text: "remove the old docs too", Detail: "all"},
+		{Kind: event.Notice, Text: "spend at 80%"},
+	} {
+		e.Round, e.Time = 2, now.Add(time.Duration(i)*time.Second)
+		store.AppendEvent("k3f9qz", e)
+	}
+	m := newModel(Options{Store: store})
+	m.Update(tea.WindowSizeMsg{Width: 160, Height: 40})
+	m.key("2")
+	l := m.current()
+	texts := func() []string {
+		var out []string
+		for _, e := range m.logEvents(l) {
+			out = append(out, e.Text)
+		}
+		return out
+	}
+	has := func(want ...string) {
+		t.Helper()
+		got := strings.Join(texts(), "|")
+		for _, w := range want {
+			if !strings.Contains(got, w) {
+				t.Errorf("filter %d lacks %q: %q", m.filterPos(), w, got)
+			}
+		}
+	}
+	only := func(ok func(event.Event) bool) {
+		t.Helper()
+		for _, e := range m.logEvents(l) {
+			if !ok(e) {
+				t.Errorf("filter %d shows %s %q", m.filterPos(), e.Kind, e.Text)
+			}
+		}
+	}
+	has("resume", "Also document DELETE", "api.go", "remove the old docs too", "spend at 80%")
+	for _, line := range []string{"follow-up", "remove the old docs"} {
+		for _, e := range m.logEvents(l) {
+			if strings.Contains(e.Text, line) || (line == "follow-up" && e.Kind == event.FollowUp) {
+				lead, _ := m.eventParts(l, e)
+				if !strings.Contains(ansi.Strip(lead), "you") {
+					t.Errorf("%q isn't attributed to you: %q", line, ansi.Strip(lead))
+				}
+			}
+		}
+	}
+	m.key("right")
+	has("Also document DELETE", "remove the old docs too")
+	only(func(e event.Event) bool { return e.ByUser() })
+	if !strings.Contains(ansi.Strip(m.render()), "you") {
+		t.Error("the bar should show the you filter")
+	}
+	m.key("right")
+	has("resume", "spend at 80%")
+	only(func(e event.Event) bool { return e.Agent == 0 && !e.ByUser() })
+	m.key("right")
+	if m.src != srcAgent || m.agent != 0 {
+		t.Errorf("after ackn4th comes the first agent: src %d agent %d", m.src, m.agent)
+	}
+	m.key("left")
+	m.key("left")
+	m.key("left")
+	if m.filterPos() != 0 {
+		t.Errorf("left cycles back to all: %d", m.filterPos())
+	}
+	// The messages tab has no you or ackn4th stop.
+	m.key("4")
+	m.key("right")
+	if m.src != srcAgent || m.agent != 0 {
+		t.Errorf("messages: right from all is the first agent: src %d agent %d", m.src, m.agent)
+	}
+	// A narrow screen keeps the hint by showing only the selected stop.
+	m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+	m.key("2")
+	m.key("right")
+	if bar := ansi.Strip(m.filterBar(l, 60)); !strings.Contains(bar, "you") || !strings.Contains(bar, "2/6") || width(m.filterBar(l, 60)) > 60 {
+		t.Errorf("narrow bar = %q", bar)
+	}
+}

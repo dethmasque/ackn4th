@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/dethmasque/ackn4th/internal/task"
+	"github.com/dethmasque/ackn4th/internal/tools"
 )
 
 // NewTask is what the new-task form asks the host to start.
@@ -226,6 +227,20 @@ type form struct {
 	// and its agents' roles, models and efforts. Providers stay, and
 	// agents can't be added or removed (their conversations are theirs).
 	team *task.Task
+	// message, with team, makes the form a message to that running task's
+	// team instead: just the text, sent without stopping the task.
+	message bool
+}
+
+// newMessageForm is the form for a message to t's running team.
+func newMessageForm(opt *Options, t *task.Task) *form {
+	return &form{opt: opt, team: t, message: true}
+}
+
+// messageSentMsg is the outcome of sending a message to a running team.
+type messageSentMsg struct {
+	to  string
+	err error
 }
 
 // followUp is what the form sends in follow-up mode.
@@ -322,6 +337,9 @@ func (f *form) untrusted() bool {
 
 // fields lists the controls in tab order, row by row.
 func (f *form) rows() [][]field {
+	if f.message {
+		return [][]field{{{kind: "prompt"}}, {{kind: "cancel"}, {kind: "launch"}}}
+	}
 	if f.team != nil {
 		rows := [][]field{{{kind: "prompt"}}}
 		for i := range f.agents {
@@ -782,6 +800,9 @@ func (f *form) request() (NewTask, error) {
 }
 
 func (f *form) launch() tea.Cmd {
+	if f.message {
+		return f.send()
+	}
 	if f.team != nil {
 		return f.followUp()
 	}
@@ -799,6 +820,32 @@ func (f *form) launch() tea.Cmd {
 		id, err := launch(req)
 		return launchedMsg{id, err}
 	}
+}
+
+// send sends the message to the running team. A first word of @role
+// addresses that agent only.
+func (f *form) send() tea.Cmd {
+	text, to := strings.TrimSpace(f.prompt.String()), "all"
+	if rest, ok := strings.CutPrefix(text, "@"); ok {
+		role, body, _ := strings.Cut(rest, " ")
+		to, text = role, strings.TrimSpace(body)
+		var roles []string
+		for _, a := range f.team.Agents {
+			roles = append(roles, a.Role)
+		}
+		if len(tools.Targets(roles, to)) == 0 {
+			f.err = fmt.Sprintf("no %q agent: use @%s, or no @ for everyone", to, strings.Join(roles, ", @"))
+			return nil
+		}
+	}
+	if text == "" || f.opt.Message == nil {
+		f.focusOn(field{kind: "prompt"})
+		f.err = "write the message"
+		return nil
+	}
+	send, t := f.opt.Message, f.team
+	f.busy, f.err = true, ""
+	return func() tea.Msg { return messageSentMsg{to, send(t, to, text)} }
 }
 
 // followUp sends the follow-up, with the team as it now is (nil if
@@ -875,10 +922,16 @@ func (f *form) render(m *model, w, maxH int) string {
 	plines := editorLines(f.prompt, pw, focused("prompt", 0))
 	if f.prompt.String() == "" && !focused("prompt", 0) {
 		plines = []string{pFaint("Describe the task, e.g. “Add rate limiting to the API, with tests”")}
+		if f.message {
+			plines = []string{pFaint("e.g. “Use the existing logger” · start with @role for one agent")}
+		}
 	}
 	budget := maxH - 2
 	fixed := 15
-	if f.team != nil {
+	switch {
+	case f.message:
+		fixed = 10 // no agent rows
+	case f.team != nil:
 		fixed = 12 // the task's lines instead of its settings, no add button
 	}
 	gaps, pl := 2, min(max(len(plines), 3), 7)
@@ -918,7 +971,10 @@ func (f *form) render(m *model, w, maxH int) string {
 
 	// The prompt editor.
 	ask := "WHAT SHOULD THE AGENTS DO?"
-	if f.team != nil {
+	switch {
+	case f.message:
+		ask = "MESSAGE THE TEAM"
+	case f.team != nil:
 		ask = "WHAT SHOULD THEY DO NEXT?"
 	}
 	add(label(ask) + pDim("   enter adds a line · tab moves on"))
@@ -931,13 +987,19 @@ func (f *form) render(m *model, w, maxH int) string {
 		add(boxEdge("│") + fill(l, pw, bg1) + boxEdge("│"))
 	}
 	add(boxEdge("╰" + strings.Repeat("─", pw) + "╯"))
-	if f.team != nil {
+	switch {
+	case f.message:
+		add(pDim(fit("The task keeps running. Each agent gets this with its next request,", inner)),
+			pDim(fit("ahead of teammates' messages; a team that agreed it was done must agree again.", inner)))
+		gap()
+	case f.team != nil:
 		f.renderTeamHead(add, inner)
 		gap()
-	} else {
+		f.renderAgents(add, &lines, inner, c, shown, focused, label)
+	default:
 		f.renderSettings(add, gap, inner, focused)
+		f.renderAgents(add, &lines, inner, c, shown, focused, label)
 	}
-	f.renderAgents(add, &lines, inner, c, shown, focused, label)
 	return f.renderEnd(m, lines, inner, w, cur)
 }
 
@@ -1075,7 +1137,10 @@ func (f *form) renderEnd(m *model, lines []string, inner, w int, cur field) stri
 		add("", "")
 	}
 	launch := "▶ LAUNCH"
-	if f.team != nil {
+	switch {
+	case f.message:
+		launch = "▶ SEND"
+	case f.team != nil:
 		launch = "▶ RUN IT"
 	}
 	if f.busy {
@@ -1091,6 +1156,9 @@ func (f *form) renderEnd(m *model, lines []string, inner, w int, cur field) stri
 	}
 	if f.drop != nil {
 		f.drop.y++ // the panel's top border
+	}
+	if f.message {
+		return panel("MESSAGE “"+ansi.Truncate(f.team.Title(), w-30, "…")+"”", pDim("esc closes · ctrl+s sends"), lines, w, len(lines)+2, true, bg2)
 	}
 	if f.team != nil {
 		return panel("FOLLOW-UP “"+ansi.Truncate(f.team.Title(), w-30, "…")+"”", pDim("esc closes · ctrl+s runs it"), lines, w, len(lines)+2, true, bg2)

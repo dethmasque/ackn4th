@@ -37,6 +37,8 @@ func (m *model) spokenEvent(l *Live, e event.Event, full bool) string {
 		what = "the task started: " + text(e.Text)
 	case event.FollowUp:
 		what = "you gave a follow-up: " + text(e.Text)
+	case event.UserMessage:
+		what = "the team picked up your message: " + text(e.Text)
 	case event.RoundStarted:
 		what = fmt.Sprintf("round %d started", e.Round)
 	case event.TurnStarted:

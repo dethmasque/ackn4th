@@ -121,7 +121,7 @@ func (m *model) copySelected() tea.Cmd {
 	case !m.focusMain:
 		return m.copyText("the task's ID, "+t.ID, t.ID)
 	case m.view == vActivity:
-		idx := eventIdx(l, m.agent)
+		idx := m.logIdx(l)
 		if len(idx) == 0 {
 			return nil
 		}
