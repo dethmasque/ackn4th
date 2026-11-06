@@ -18,6 +18,7 @@ this off).
 | **Claude** (`claude`) | Anthropic API credits ([Console](https://console.anthropic.com) account) | `ackn4th login --provider claude`: browser sign-in through `ant` | open the printed URL in your browser |
 | **Gemini** (`gemini`) | Google AI Studio (free tier) | paste a key from [AI Studio](https://aistudio.google.com/apikey) | same |
 | **OpenAI** (`openai`) | OpenAI API credits | paste a key from [platform.openai.com](https://platform.openai.com/api-keys) | same |
+| **DeepSeek** (`deepseek`) | DeepSeek API credits | paste a key from [platform.deepseek.com](https://platform.deepseek.com/api_keys) | same |
 
 A claude.ai, ChatGPT or Gemini app subscription doesn't cover API use: use
 the CLI providers for those plans. The agent CLIs run inside ackn4th's
@@ -108,6 +109,7 @@ provider.go    the provider-neutral interface every adapter implements
 claude/        Anthropic API (Messages, prompt caching, server-side compaction)
 gemini/        Gemini API (AI Studio key or Vertex AI)
 openai/        OpenAI Responses API (stateless; model probing: PickModel)
+deepseek/      DeepSeek API (OpenAI-compatible Responses API, stateless, API key)
 claudecode/    local Claude Code as the model loop, with its own tools off
 cliagent/      Codex, Cursor and Copilot, run inside the OS sandbox
 clis/          the agent CLIs' install checks and sign-in commands

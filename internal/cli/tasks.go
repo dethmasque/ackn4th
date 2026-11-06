@@ -217,7 +217,7 @@ By default the whole team runs on one provider (default_provider in
 config.yaml, claude out of the box). That's the fast, cheap setup: agents on
 the same provider, model and effort share one cached copy of the team's
 context (tools, rules, project brief) instead of each paying for its own.
-Set the team's provider with --provider (claude, gemini, openai, claude-code,
+Set the team's provider with --provider (claude, gemini, openai, deepseek, claude-code,
 codex, cursor, copilot), one agent's with --agent, or Claude or Gemini per
 role with --use-claude / --use-gemini; --mix alternates claude, gemini, ...
 When no provider is named and its CLI is signed in, claude runs through
@@ -379,7 +379,7 @@ come from the --profile, then from providers: in config.yaml.`,
 	}
 	f.register(cmd)
 	cmd.Flags().StringVar(&roleName, "role", "", "the agent's `role`, or several for one agent: backend_dev,qa_engineer (see ackn4th roles)")
-	cmd.Flags().StringVar(&prov, "provider", "", "`provider`: claude, gemini, openai, claude-code, codex, cursor, copilot (default: default_provider in config.yaml)")
+	cmd.Flags().StringVar(&prov, "provider", "", "`provider`: claude, gemini, openai, deepseek, claude-code, codex, cursor, copilot (default: default_provider in config.yaml)")
 	cmd.Flags().StringVar(&model, "model", "", "`model` ID, e.g. claude-sonnet-5-5 (default: providers.<provider>.model)")
 	cmd.Flags().StringVar(&effort, "effort", "", "reasoning `level`: low, medium, high, xhigh, max")
 	cmd.Flags().StringVar(&profile, "profile", "", "agent `profile` from agents: in config.yaml")
