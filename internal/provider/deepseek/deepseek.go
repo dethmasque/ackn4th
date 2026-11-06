@@ -29,6 +29,9 @@ const Name = "deepseek"
 const KeyURL = "https://platform.deepseek.com/api_keys"
 
 // baseURL is pinned, so the key only ever goes to DeepSeek.
+// The changes in https://github.com/dethmasque/ackn4th/pull/21
+// will allow for a custom baseURL supplied to the OpenAI provider
+// for use with DeepSeek.
 const baseURL = "https://api.deepseek.com"
 
 const maxAttempts = 4
