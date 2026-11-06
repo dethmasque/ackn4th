@@ -446,6 +446,26 @@ func TestFormHelp(t *testing.T) {
 	}
 }
 
+// Issue #20: the "0 = until every agent agrees" blurb belongs to the rounds
+// field, so it must not be separated from it by the CAP field.
+func TestRoundsHintStaysWithRounds(t *testing.T) {
+	var launched []NewTask
+	m := newModel(formOptions(task.NewStore(t.TempDir()), &launched))
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	press(m, "n")
+	for _, l := range strings.Split(ansi.Strip(m.render()), "\n") {
+		if !strings.Contains(l, "ROUNDS") {
+			continue
+		}
+		r, c, h := strings.Index(l, "ROUNDS"), strings.Index(l, "CAP $"), strings.Index(l, "0 = until")
+		if c < 0 || h < 0 || !(r < h && h < c) {
+			t.Errorf("want ROUNDS < hint < CAP on one line (rounds %d, hint %d, cap %d):\n%s", r, h, c, l)
+		}
+		return
+	}
+	t.Error("no ROUNDS line on the new-task form")
+}
+
 func TestLegendListsEveryProvider(t *testing.T) {
 	var launched []NewTask
 	opt := formOptions(fixture(t), &launched)
