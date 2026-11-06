@@ -358,7 +358,7 @@ func (m *model) rolePaste(s string) {
 		}
 		v.edit.fields[v.edit.focus].insert(s)
 	case v.imp != nil && !v.imp.busy:
-		v.imp.src.insert(strings.TrimSpace(s))
+		v.imp.src.insert(strings.TrimSpace(strings.ReplaceAll(cleanText(s), "\n", " ")))
 	}
 }
 
