@@ -24,6 +24,12 @@ func TestUserMessageMidTurn(t *testing.T) {
 		var claudeIn, geminiIn []string
 		var r *Runner
 		var tk *Task
+		// In a parallel round the agents' turns overlap in any order: the
+		// reviewer's first reply waits until the message is posted, so it
+		// reads it within its turn (with its next request) whatever the
+		// timing. Without this it can finish first, and the message,
+		// unread, rightly calls off the vote.
+		posted := make(chan struct{})
 		scripts := map[string]*script{
 			"claude": {name: "claude", inputs: &claudeIn,
 				replies: append([]*provider.Reply{toolReply(call("list_dir", map[string]string{"path": "."}))}, done("built")...),
@@ -31,8 +37,16 @@ func TestUserMessageMidTurn(t *testing.T) {
 					if err := r.Store.MessageTeam(tk.ID, "", "Use tabs, not spaces.", time.Now()); err != nil {
 						t.Error(err)
 					}
+					close(posted)
 				}}},
-			"gemini": {name: "gemini", inputs: &geminiIn, replies: done("reviewed")},
+			"gemini": {name: "gemini", inputs: &geminiIn, replies: done("reviewed"),
+				hooks: map[int]func(){0: func() {
+					select {
+					case <-posted:
+					case <-time.After(10 * time.Second):
+						t.Error("the message was never posted")
+					}
+				}}},
 		}
 		r, tk = setup(t, scripts,
 			AgentSpec{Role: "backend_dev", Provider: "claude"},
